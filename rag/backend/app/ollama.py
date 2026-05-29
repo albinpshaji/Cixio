@@ -44,6 +44,7 @@ def generate_answer(prompt: str) -> str:
             "options": {
                 "num_predict": settings.generation_max_tokens,
                 "temperature": 0.2,
+                "num_ctx": settings.ollama_num_ctx,
             },
         },
         timeout=timeout_seconds,

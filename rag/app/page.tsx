@@ -1,351 +1,1166 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { useState, useEffect, useRef, FormEvent } from "react";
+import {
+  MessageSquare,
+  Plus,
+  Trash2,
+  Paperclip,
+  Send,
+  Loader2,
+  BookOpen,
+  Database,
+  Terminal,
+  Cpu,
+  X,
+  FileText,
+  CheckCircle2,
+  ChevronRight,
+  Info,
+  Brain,
+  ChevronDown,
+  Sun,
+  Moon,
+  Square
+} from "lucide-react";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
 
-function getApiErrorMessage(data: unknown, fallback: string) {
-  if (typeof data !== "object" || data === null) {
-    return fallback;
-  }
+function parseBold(text: string) {
+  const parts = text.split("**");
+  return parts.map((part, i) => {
+    if (i % 2 === 1) {
+      return <strong key={i} className="font-bold text-slate-900 dark:text-white">{part}</strong>;
+    }
+    return part;
+  });
+}
 
-  const record = data as Record<string, unknown>;
-
-  if (typeof record.detail === "string") {
-    return record.detail;
-  }
-
-  if (typeof record.error === "string") {
-    return record.error;
-  }
-
-  return fallback;
+function renderMarkdown(text: string) {
+  if (!text) return null;
+  
+  const lines = text.split("\n");
+  
+  return lines.map((line, idx) => {
+    if (line.startsWith("### ")) {
+      return <h4 key={idx} className="text-base font-bold text-slate-800 dark:text-slate-100 mt-3 mb-1.5">{line.substring(4)}</h4>;
+    }
+    if (line.startsWith("## ")) {
+      return <h3 key={idx} className="text-lg font-bold text-slate-800 dark:text-slate-100 mt-4 mb-2">{line.substring(3)}</h3>;
+    }
+    if (line.startsWith("# ")) {
+      return <h2 key={idx} className="text-xl font-bold text-slate-800 dark:text-slate-100 mt-5 mb-3">{line.substring(2)}</h2>;
+    }
+    
+    const isBullet = line.trim().startsWith("* ") || line.trim().startsWith("- ");
+    if (isBullet) {
+      const bulletChar = line.includes("* ") ? "* " : "- ";
+      const indentCount = line.indexOf(bulletChar);
+      const cleanLine = line.substring(indentCount + 2);
+      return (
+        <ul key={idx} className="list-disc pl-5 my-1 text-sm text-slate-700 dark:text-slate-300 leading-relaxed" style={{ marginLeft: `${indentCount * 4}px` }}>
+          <li>{parseBold(cleanLine)}</li>
+        </ul>
+      );
+    }
+    
+    return (
+      <p key={idx} className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed my-1.5 min-h-[0.5rem]">
+        {parseBold(line)}
+      </p>
+    );
+  });
 }
 
 type Source = {
   id: number;
   content: string;
-  metadata: Record<string, unknown> | null;
+  metadata: {
+    source?: string;
+    page?: number;
+    chunkIndex?: number;
+  } | null;
   similarity: number;
 };
 
 type Message = {
-  role: "user" | "assistant";
+  id?: string;
+  role: "user" | "assistant" | "system";
   content: string;
+  thoughts?: string;
   sources?: Source[];
+  tokenUsage?: {
+    prompt_tokens: number;
+    eval_tokens: number;
+  };
+  created_at?: string;
+};
+
+type Session = {
+  id: string;
+  title: string;
+  created_at: string;
 };
 
 export default function Home() {
-  const [source, setSource] = useState("Phase 1 notes");
-  const [documentText, setDocumentText] = useState("");
-  const [question, setQuestion] = useState("");
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [lastSources, setLastSources] = useState<Source[]>([]);
-  const [ingestStatus, setIngestStatus] = useState("");
-  const [uploadStatus, setUploadStatus] = useState("");
-  const [chatStatus, setChatStatus] = useState("");
-  const [isIngesting, setIsIngesting] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
+  const [question, setQuestion] = useState("");
   const [isAsking, setIsAsking] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [activeDrawerSources, setActiveDrawerSources] = useState<Source[] | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [thinkLevel, setThinkLevel] = useState<"none" | "low" | "medium" | "max">("medium");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [searchDepth, setSearchDepth] = useState<"fast" | "balanced" | "deep">("balanced");
+  const [searchDepthOpen, setSearchDepthOpen] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
 
-  const canIngest = useMemo(
-    () => documentText.trim().length > 0 && !isIngesting,
-    [documentText, isIngesting],
-  );
-  const canUpload = useMemo(() => pdfFile !== null && !isUploading, [pdfFile, isUploading]);
-  const canAsk = useMemo(() => question.trim().length > 0 && !isAsking, [question, isAsking]);
-
-  async function ingestDocument(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!canIngest) {
-      return;
+  // Initialize theme from localStorage
+  useEffect(() => {
+    const savedTheme = localStorage.getItem("theme") as "light" | "dark" | null;
+    if (savedTheme) {
+      setTheme(savedTheme);
+      document.documentElement.classList.toggle("dark", savedTheme === "dark");
+    } else {
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const initialTheme = prefersDark ? "dark" : "light";
+      setTheme(initialTheme);
+      document.documentElement.classList.toggle("dark", initialTheme === "dark");
     }
+  }, []);
 
-    setIsIngesting(true);
-    setIngestStatus("Chunking text and generating embeddings...");
+  const toggleTheme = () => {
+    const nextTheme = theme === "light" ? "dark" : "light";
+    setTheme(nextTheme);
+    localStorage.setItem("theme", nextTheme);
+    document.documentElement.classList.toggle("dark", nextTheme === "dark");
+  };
 
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/ingest`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          source,
-          text: documentText,
-        }),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(getApiErrorMessage(data, "Ingestion failed."));
-      }
-
-      setIngestStatus(`Stored ${data.chunks} chunks from "${data.source}".`);
-    } catch (error) {
-      setIngestStatus(error instanceof Error ? error.message : "Ingestion failed.");
-    } finally {
-      setIsIngesting(false);
-    }
+  // Document Manager states
+  const [activeTab, setActiveTab] = useState<"chat" | "documents">("chat");
+  interface UploadedDoc {
+    filename: string;
+    chunk_count: number;
+    uploaded_at: string | null;
+    session_id: string | null;
   }
+  const [uploadedDocs, setUploadedDocs] = useState<UploadedDoc[]>([]);
+  const [isLoadingDocs, setIsLoadingDocs] = useState(false);
 
-  async function askQuestion(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const globalFileInputRef = useRef<HTMLInputElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-    const currentQuestion = question.trim();
-
-    if (!currentQuestion || !canAsk) {
-      return;
-    }
-
-    setQuestion("");
-    setIsAsking(true);
-    setChatStatus("Embedding question, retrieving context, and generating answer...");
-    setMessages((current) => [...current, { role: "user", content: currentQuestion }]);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          question: currentQuestion,
-        }),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(getApiErrorMessage(data, "Question failed."));
-      }
-
-      setLastSources(data.sources ?? []);
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          content: data.answer,
-          sources: data.sources ?? [],
-        },
-      ]);
-      setChatStatus("");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Question failed.";
-
-      setChatStatus(message);
-      setMessages((current) => [...current, { role: "assistant", content: message }]);
-    } finally {
+  // Stop LLM Generation function
+  function stopGeneration() {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
       setIsAsking(false);
     }
   }
 
-  async function uploadPdf(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!pdfFile || !canUpload) {
-      return;
+  // Fetch uploaded documents from API
+  async function fetchUploadedDocs() {
+    setIsLoadingDocs(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/documents`);
+      if (res.ok) {
+        const data = await res.json();
+        setUploadedDocs(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch documents:", err);
+    } finally {
+      setIsLoadingDocs(false);
     }
+  }
+
+  // Handle Global PDF/TXT Upload Ingestion
+  async function handleGlobalFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
     const formData = new FormData();
-    formData.append("file", pdfFile);
+    formData.append("file", file);
 
-    setIsUploading(true);
-    setUploadStatus("Extracting PDF text and generating embeddings...");
+    setIsLoadingDocs(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/upload`, {
+      const res = await fetch(`${API_BASE_URL}/api/upload`, {
         method: "POST",
         body: formData,
       });
-      const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error(getApiErrorMessage(data, "PDF upload failed."));
+      if (!res.ok) throw new Error("Upload failed");
+
+      // Refresh list of documents
+      await fetchUploadedDocs();
+    } catch (err) {
+      console.error("Failed to upload global document", err);
+      alert("Failed to upload global document. Please check backend connection.");
+    } finally {
+      setIsLoadingDocs(false);
+      if (globalFileInputRef.current) {
+        globalFileInputRef.current.value = "";
       }
+    }
+  }
 
-      setUploadStatus(`Stored ${data.chunks} chunks from "${data.source}" across ${data.pages} pages.`);
-    } catch (error) {
-      setUploadStatus(error instanceof Error ? error.message : "PDF upload failed.");
+  // Delete an uploaded document
+  async function handleDeleteDoc(filename: string, sessionId: string | null) {
+    if (!confirm(`Are you sure you want to delete "${filename}"?`)) return;
+    try {
+      const url = `${API_BASE_URL}/api/documents?filename=${encodeURIComponent(filename)}` + (sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : "");
+      const res = await fetch(url, { method: "DELETE" });
+      if (res.ok) {
+        fetchUploadedDocs();
+      }
+    } catch (err) {
+      console.error("Failed to delete document:", err);
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === "documents") {
+      fetchUploadedDocs();
+    }
+  }, [activeTab]);
+
+  // Auto-scroll chat window only if the user is already near the bottom
+  const scrollToBottom = (force = false) => {
+    const container = chatContainerRef.current;
+    if (!container) return;
+
+    // Check if the user is near the bottom (within 150px threshold)
+    const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 150;
+
+    if (isAtBottom || force) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  };
+
+  useEffect(() => {
+    // If the last message is from the user, force a scroll to the bottom!
+    const lastMessage = messages[messages.length - 1];
+    const isUserMsg = lastMessage?.role === "user";
+    scrollToBottom(isUserMsg);
+  }, [messages]);
+
+  // Initial load: fetch sessions
+  useEffect(() => {
+    fetchSessions();
+  }, []);
+
+  // Fetch all chat history sessions
+  async function fetchSessions() {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/sessions`);
+      if (res.ok) {
+        const data = await res.json();
+        setSessions(data);
+        if (data.length > 0) {
+          selectSession(data[0].id);
+        } else {
+          // If no sessions exist, auto-create one
+          createNewSession();
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch sessions", err);
+    }
+  }
+
+  // Create a fresh conversation session
+  async function createNewSession() {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "New Conversation" }),
+      });
+      if (res.ok) {
+        const newSession = await res.json();
+        setSessions((prev) => [newSession, ...prev]);
+        selectSession(newSession.id);
+      }
+    } catch (err) {
+      console.error("Failed to create session", err);
+    }
+  }
+
+  // Select/switch active chat session
+  async function selectSession(id: string) {
+    setActiveSessionId(id);
+    setMessages([]);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/sessions/${id}/messages`);
+      if (res.ok) {
+        const history = await res.json();
+        setMessages(history);
+      }
+    } catch (err) {
+      console.error("Failed to fetch messages for session", err);
+    }
+  }
+
+  // Delete chat session
+  async function deleteSession(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm("Are you sure you want to delete this chat session?")) return;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/sessions/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setSessions((prev) => prev.filter((s) => s.id !== id));
+        if (activeSessionId === id) {
+          const remaining = sessions.filter((s) => s.id !== id);
+          if (remaining.length > 0) {
+            selectSession(remaining[0].id);
+          } else {
+            setActiveSessionId(null);
+            setMessages([]);
+            createNewSession();
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete session", err);
+    }
+  }
+
+  // Handle PDF/TXT Upload Ingestion
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !activeSessionId) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("sessionId", activeSessionId);
+
+    setIsUploading(true);
+    
+    // Add pending upload message to the chat
+    const tempSystemId = `sys-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: tempSystemId,
+        role: "system",
+        content: `Uploading and indexing "${file.name}"... Creating vector chunks in PostgreSQL pgvector.`,
+      },
+    ]);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error("Upload failed");
+
+      const data = await res.json();
+
+      // Replace system message with successful confirmation
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === tempSystemId
+            ? {
+                ...msg,
+                content: `📁 Document "${data.source}" successfully processed! Split into ${data.chunks} chunks across ${data.pages} pages. Dynamic RAG priority boosting is active.`,
+              }
+            : msg
+        )
+      );
+
+      // Auto update sidebar title if it was default
+      const activeSession = sessions.find((s) => s.id === activeSessionId);
+      if (activeSession && activeSession.title === "New Conversation") {
+        const newTitle = `Chat: ${file.name.substring(0, 20)}`;
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === activeSessionId ? { ...s, title: newTitle } : s
+          )
+        );
+        fetch(`${API_BASE_URL}/api/sessions/${activeSessionId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: newTitle }),
+        }).catch((err) => console.error("Failed to persist session title:", err));
+      }
+    } catch (err) {
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === tempSystemId
+            ? {
+                ...msg,
+                content: `❌ Ingestion failed for "${file.name}". Please make sure the backend is active and accepts the file type.`,
+              }
+            : msg
+        )
+      );
     } finally {
       setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  // Send grounded chat message (SSE Stream)
+  async function handleSendMessage(e: FormEvent) {
+    e.preventDefault();
+    const currentQuestion = question.trim();
+    if (!currentQuestion || isAsking || !activeSessionId) return;
+
+    setQuestion("");
+    setIsAsking(true);
+
+    // Append user message
+    setMessages((prev) => [...prev, { role: "user", content: currentQuestion }]);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: currentQuestion,
+          sessionId: activeSessionId,
+          think: thinkLevel !== "none",
+          think_level: thinkLevel,
+          search_depth: searchDepth,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) throw new Error("Connection failed");
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      if (!reader) return;
+
+      let assistantAnswer = "";
+      let assistantThoughts = "";
+      let retrievedSources: Source[] = [];
+
+      // Append blank assistant response
+      const tempId = `asst-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: tempId, role: "assistant", content: "", thoughts: "", sources: [] },
+      ]);
+
+      let buffer = "";
+      let currentEvent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || ""; // keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.replace("event: ", "").trim();
+          } else if (line.startsWith("data: ")) {
+            const rawData = line.substring(6);
+            try {
+              const parsed = JSON.parse(rawData);
+              if (currentEvent === "sources") {
+                retrievedSources = parsed;
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === tempId ? { ...msg, sources: retrievedSources } : msg
+                  )
+                );
+              } else if (currentEvent === "thinking") {
+                assistantThoughts += parsed;
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === tempId ? { ...msg, thoughts: assistantThoughts } : msg
+                  )
+                );
+              } else if (currentEvent === "token") {
+                assistantAnswer += parsed;
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === tempId ? { ...msg, content: assistantAnswer } : msg
+                  )
+                );
+              } else if (currentEvent === "usage") {
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === tempId ? { ...msg, tokenUsage: parsed } : msg
+                  )
+                );
+              }
+            } catch (err) {
+              // Ignore parsed block errors in stream partitions
+            }
+          }
+        }
+      }
+
+      // Update sidebar session title if it was first message
+      const activeSession = sessions.find((s) => s.id === activeSessionId);
+      if (activeSession && activeSession.title === "New Conversation") {
+        const shortenedTitle = currentQuestion.substring(0, 24) + (currentQuestion.length > 24 ? "..." : "");
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === activeSessionId ? { ...s, title: shortenedTitle } : s
+          )
+        );
+        fetch(`${API_BASE_URL}/api/sessions/${activeSessionId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: shortenedTitle }),
+        }).catch((err) => console.error("Failed to persist session title:", err));
+      }
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        return;
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "Sorry, I encountered a communication error with the local RAG FastAPI engine. Check if port 8001 is open.",
+        },
+      ]);
+    } finally {
+      setIsAsking(false);
+      abortControllerRef.current = null;
     }
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f7f4] text-[#171717]">
-      <section className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-5 py-6 lg:px-8">
-        <header className="flex flex-col gap-3 border-b border-[#d9d6cc] pb-5 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-sm font-medium uppercase tracking-[0.12em] text-[#5f6f52]">
-              Local RAG Engine
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold text-[#111] md:text-4xl">
-              Document Question Answering
-            </h1>
+    <main className="flex h-screen w-screen overflow-hidden bg-background text-foreground font-sans antialiased">
+      {/* 1. LEFT SIDEBAR PANEL (ChatGPT Minimal Theme) */}
+      <section
+        className={`flex h-full flex-col border-r border-custom-border bg-sidebar transition-all duration-300 ${
+          sidebarOpen ? "w-80" : "w-0"
+        } overflow-hidden`}
+      >
+        {/* Sidebar Header */}
+        <div className="flex items-center gap-3 border-b border-custom-border px-5 py-4 bg-sidebar">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-200 dark:bg-slate-800 text-foreground">
+            <Database className="h-5 w-5" />
           </div>
-          <div className="grid gap-1 text-sm text-[#5b5b55]">
-            <span>Ollama: qwen3.5:4b</span>
-            <span>Embeddings: nomic-embed-text, 768d</span>
-            <span>Vector store: PostgreSQL + pgvector</span>
+          <div>
+            <h1 className="text-sm font-semibold tracking-wide text-foreground uppercase font-sans">
+              SmartHub AI
+            </h1>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">Local Vector RAG Engine</p>
+          </div>
+        </div>
+
+        {/* Start New Session action */}
+        <div className="px-4 pt-4 pb-2">
+          <button
+            onClick={createNewSession}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 dark:bg-blue-600 hover:bg-blue-700 dark:hover:bg-blue-700 px-4 py-2.5 text-sm font-medium text-white transition-all shadow-sm cursor-pointer"
+          >
+            <Plus className="h-4 w-4" />
+            New Conversation
+          </button>
+        </div>
+
+        {/* Tab Selection */}
+        <div className="px-4 pb-3 flex gap-2">
+          <button
+            onClick={() => setActiveTab("chat")}
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold border transition-all cursor-pointer ${
+              activeTab === "chat"
+                ? "bg-white dark:bg-slate-800 border-custom-border text-foreground shadow-sm"
+                : "bg-transparent border-transparent text-slate-500 hover:bg-slate-200/50 dark:hover:bg-slate-800/40"
+            }`}
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            Chats
+          </button>
+          <button
+            onClick={() => setActiveTab("documents")}
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold border transition-all cursor-pointer ${
+              activeTab === "documents"
+                ? "bg-white dark:bg-slate-800 border-custom-border text-foreground shadow-sm"
+                : "bg-transparent border-transparent text-slate-500 hover:bg-slate-200/50 dark:hover:bg-slate-800/40"
+            }`}
+          >
+            <BookOpen className="h-3.5 w-3.5" />
+            Documents
+          </button>
+        </div>
+
+        {/* Dynamic Conversational History Sessions List */}
+        <div className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
+          {sessions.length === 0 ? (
+            <div className="flex h-32 items-center justify-center text-center text-xs text-slate-400">
+              No sessions active. Create one!
+            </div>
+          ) : (
+            sessions.map((s) => {
+              const isActive = s.id === activeSessionId;
+              return (
+                <div
+                  key={s.id}
+                  onClick={() => {
+                    selectSession(s.id);
+                    setActiveTab("chat");
+                  }}
+                  className={`group flex cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2 transition-all duration-150 ${
+                    isActive && activeTab === "chat"
+                      ? "bg-slate-200/70 dark:bg-slate-800/70 text-foreground font-medium"
+                      : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/40 dark:hover:bg-slate-800/40 hover:text-foreground"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 overflow-hidden">
+                    <MessageSquare className={`h-4 w-4 flex-shrink-0 ${isActive && activeTab === "chat" ? "text-foreground" : "text-slate-400"}`} />
+                    <span className="truncate text-sm">{s.title}</span>
+                  </div>
+                  <button
+                    onClick={(e) => deleteSession(s.id, e)}
+                    className="opacity-0 group-hover:opacity-100 hover:text-red-600 p-0.5 rounded transition-opacity duration-150"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-slate-400 dark:text-slate-500 hover:text-red-600" />
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </section>
+
+      {/* 2. MAIN WORKSPACE */}
+      <section className="flex h-full flex-1 flex-col overflow-hidden bg-background">
+        {/* Top Header workspace */}
+        <header className="flex items-center justify-between border-b border-custom-border bg-background px-6 py-3.5">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              className="rounded-lg p-1.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200 cursor-pointer"
+            >
+              <ChevronRight className={`h-5 w-5 transform transition-transform ${sidebarOpen ? "rotate-180" : ""}`} />
+            </button>
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">
+                {activeTab === "documents" ? "Knowledge Hub" : (sessions.find((s) => s.id === activeSessionId)?.title || "SmartHub RAG")}
+              </h2>
+              <div className="flex items-center gap-3 mt-0.5">
+                <span className="inline-flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 uppercase font-mono tracking-wider bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                  <Cpu className="h-2.5 w-2.5 text-blue-500" /> qwen3.5:4b
+                </span>
+                <span className="inline-flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 uppercase font-mono tracking-wider bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                  <BookOpen className="h-2.5 w-2.5 text-green-500" /> nomic-embed
+                </span>
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
+            <span className="hidden md:flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg font-mono">
+              <Terminal className="h-3.5 w-3.5 text-blue-500" />
+              FastAPI: port 8001
+            </span>
+            <button
+              onClick={toggleTheme}
+              className="flex items-center justify-center p-2 rounded-xl border border-custom-border bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-800 dark:hover:text-slate-100 shadow-sm transition-all cursor-pointer hover:scale-105"
+              title={`Switch to ${theme === "light" ? "Dark" : "Light"} Mode`}
+            >
+              {theme === "light" ? (
+                <Moon className="h-4.5 w-4.5 text-indigo-500 rotate-0 hover:-rotate-12 transition-transform" />
+              ) : (
+                <Sun className="h-4.5 w-4.5 text-yellow-500 rotate-0 hover:rotate-45 transition-transform" />
+              )}
+            </button>
           </div>
         </header>
 
-        <div className="grid flex-1 gap-6 lg:grid-cols-[minmax(320px,0.85fr)_minmax(420px,1.15fr)]">
-          <section
-            className="flex min-h-[560px] flex-col gap-4 rounded-lg border border-[#d9d6cc] bg-white p-4 shadow-sm"
-          >
-            <form onSubmit={ingestDocument} className="flex flex-1 flex-col gap-4">
-              <div>
-                <label htmlFor="source" className="text-sm font-medium text-[#34342f]">
-                  Source label
-                </label>
-                <input
-                  id="source"
-                  value={source}
-                  onChange={(event) => setSource(event.target.value)}
-                  className="mt-2 h-11 w-full rounded-md border border-[#c8c3b8] bg-white px-3 text-sm outline-none focus:border-[#57735a]"
-                  placeholder="Example: research-notes.txt"
-                />
-              </div>
-
-              <div className="flex flex-1 flex-col">
-                <label htmlFor="document" className="text-sm font-medium text-[#34342f]">
-                  Document text
-                </label>
-                <textarea
-                  id="document"
-                  value={documentText}
-                  onChange={(event) => setDocumentText(event.target.value)}
-                  className="mt-2 min-h-[280px] flex-1 resize-none rounded-md border border-[#c8c3b8] bg-[#fcfcfa] p-3 text-sm leading-6 outline-none focus:border-[#57735a]"
-                  placeholder="Paste a document, article, notes, or extracted PDF text here..."
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={!canIngest}
-                className="h-11 rounded-md bg-[#243d30] px-4 text-sm font-semibold text-white transition hover:bg-[#1a2f24] disabled:cursor-not-allowed disabled:bg-[#a6aca4]"
-              >
-                {isIngesting ? "Ingesting..." : "Ingest Document"}
-              </button>
-
-              {ingestStatus ? (
-                <p className="rounded-md bg-[#eef2e9] px-3 py-2 text-sm text-[#33452d]">
-                  {ingestStatus}
-                </p>
-              ) : null}
-            </form>
-
-            <form onSubmit={uploadPdf} className="border-t border-[#e3e0d8] pt-4">
-              <label htmlFor="pdf" className="text-sm font-medium text-[#34342f]">
-                PDF upload
-              </label>
-              <div className="mt-2 flex flex-col gap-3 sm:flex-row">
-                <input
-                  id="pdf"
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  onChange={(event) => setPdfFile(event.target.files?.[0] ?? null)}
-                  className="min-h-11 flex-1 rounded-md border border-[#c8c3b8] bg-[#fcfcfa] px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-[#e8ece3] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[#243d30]"
-                />
-                <button
-                  type="submit"
-                  disabled={!canUpload}
-                  className="h-11 rounded-md bg-[#243d30] px-4 text-sm font-semibold text-white transition hover:bg-[#1a2f24] disabled:cursor-not-allowed disabled:bg-[#a6aca4]"
-                >
-                  {isUploading ? "Uploading..." : "Upload PDF"}
-                </button>
-              </div>
-
-              {uploadStatus ? (
-                <p className="mt-3 rounded-md bg-[#eef2e9] px-3 py-2 text-sm text-[#33452d]">
-                  {uploadStatus}
-                </p>
-              ) : null}
-            </form>
-          </section>
-
-          <section className="grid min-h-[560px] gap-4 lg:grid-rows-[1fr_auto]">
-            <div className="flex flex-col rounded-lg border border-[#d9d6cc] bg-white shadow-sm">
-              <div className="border-b border-[#e3e0d8] px-4 py-3">
-                <h2 className="text-base font-semibold">RAG Chat</h2>
-              </div>
-
-              <div className="flex-1 space-y-4 overflow-y-auto p-4">
-                {messages.length === 0 ? (
-                  <div className="flex h-full min-h-[320px] items-center justify-center text-center text-sm text-[#65655f]">
-                    Ingest text, then ask a question grounded in the stored chunks.
+        {activeTab === "chat" ? (
+          <>
+            {/* Chat Stream message container */}
+            <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
+              {messages.length === 0 ? (
+                /* Futuristic landing empty state */
+                <div className="mx-auto flex h-full max-w-xl flex-col justify-center text-center space-y-6">
+                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600/10 text-blue-600 shadow-inner">
+                    <Database className="h-8 w-8 animate-pulse" />
                   </div>
-                ) : (
-                  messages.map((message, index) => (
-                    <article
-                      key={`${message.role}-${index}`}
-                      className={`max-w-[88%] rounded-lg px-4 py-3 text-sm leading-6 ${
-                        message.role === "user"
-                          ? "ml-auto bg-[#243d30] text-white"
-                          : "bg-[#f1f0ea] text-[#1f1f1b]"
-                      }`}
-                    >
-                      {message.content}
-                    </article>
-                  ))
-                )}
-              </div>
-
-              <form onSubmit={askQuestion} className="border-t border-[#e3e0d8] p-4">
-                <div className="flex gap-3">
-                  <input
-                    value={question}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    className="h-11 flex-1 rounded-md border border-[#c8c3b8] bg-white px-3 text-sm outline-none focus:border-[#57735a]"
-                    placeholder="Ask a question about the ingested documents..."
-                  />
-                  <button
-                    type="submit"
-                    disabled={!canAsk}
-                    className="h-11 rounded-md bg-[#243d30] px-5 text-sm font-semibold text-white transition hover:bg-[#1a2f24] disabled:cursor-not-allowed disabled:bg-[#a6aca4]"
-                  >
-                    {isAsking ? "Asking..." : "Ask"}
-                  </button>
+                  <div className="space-y-2">
+                    <h3 className="text-xl font-semibold text-foreground">Grounded Document Assistant</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                      Start a dynamic conversation. Upload your PDFs or text files to instantly segment, generate vector embeddings, and chat in absolute session-isolation.
+                    </p>
+                  </div>
+                  
+                  <div className="grid gap-3 grid-cols-2 text-left mt-4">
+                    <div className="rounded-xl bg-white dark:bg-slate-900 border border-custom-border p-4 shadow-sm">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <FileText className="h-4 w-4 text-blue-500" />
+                        <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Session Isolated</span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Uploaded documents are strictly queried within this specific conversation thread.
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-white dark:bg-slate-900 border border-custom-border p-4 shadow-sm">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                        <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Priority Boosting</span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Your uploaded papers are given a similarity boost, retaining global context only as a fallback.
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                {chatStatus ? <p className="mt-3 text-sm text-[#6b5c20]">{chatStatus}</p> : null}
-              </form>
+              ) : (
+                messages.map((msg, index) => {
+                  const isUser = msg.role === "user";
+                  const isSystem = msg.role === "system";
+
+                  if (isSystem) {
+                    const isLoading = msg.content.includes("Uploading") || msg.content.includes("indexing");
+                    const isError = msg.content.includes("❌") || msg.content.includes("failed");
+                    return (
+                      <div key={index} className="flex justify-center">
+                        <div className="inline-flex items-center gap-2 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 px-4 py-2.5 text-xs text-slate-700 dark:text-slate-300 font-mono shadow-sm max-w-lg">
+                          {isLoading ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500 flex-shrink-0" />
+                          ) : isError ? (
+                            <X className="h-3.5 w-3.5 text-red-500 flex-shrink-0" />
+                          ) : (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+                          )}
+                          <span>{msg.content}</span>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={index}
+                      className={`flex gap-4 ${isUser ? "justify-end" : "justify-start animate-fade-in"}`}
+                    >
+                      {!isUser && (
+                        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-blue-600/10 dark:bg-blue-500/20 border border-blue-500/20 dark:border-blue-800/80 text-blue-600 dark:text-blue-400">
+                          <Cpu className="h-5 w-5" />
+                        </div>
+                      )}
+
+                      <div className="space-y-1.5 max-w-[80%]">
+                        {/* Collapsible reasoning thought block */}
+                        {!isUser && msg.thoughts && (
+                          <details open className="group mb-2 max-w-full overflow-hidden border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-100/50 dark:bg-slate-900/40 text-xs text-slate-500 dark:text-slate-400">
+                            <summary className="flex items-center justify-between px-3.5 py-2 cursor-pointer list-none select-none hover:bg-slate-200/40 dark:hover:bg-slate-850 transition-colors">
+                              <div className="flex items-center gap-2">
+                                <Brain className="h-3.5 w-3.5 text-blue-500 animate-pulse" />
+                                <span className="font-semibold text-slate-700 dark:text-slate-350">Thought Process</span>
+                              </div>
+                              <ChevronRight className="h-3.5 w-3.5 transform transition-transform group-open:rotate-90 text-slate-400 dark:text-slate-500" />
+                            </summary>
+                            <div className="px-3.5 pb-2.5 pt-1.5 border-t border-slate-200 dark:border-slate-800 font-mono text-[11px] leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto text-slate-600 dark:text-slate-350 scrollbar-thin">
+                              {msg.thoughts}
+                            </div>
+                          </details>
+                        )}
+
+                        <div
+                          className={
+                            isUser
+                              ? "bg-slate-100 dark:bg-slate-800 text-slate-850 dark:text-slate-100 rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm max-w-[85%] ml-auto"
+                              : "text-slate-850 dark:text-slate-200 text-sm leading-relaxed pl-1.5"
+                          }
+                        >
+                          {isUser ? (
+                            <p className="whitespace-pre-line">{msg.content}</p>
+                          ) : msg.content === "" && (!msg.thoughts || msg.thoughts === "") ? (
+                            <div className="flex items-center gap-1.5 py-2">
+                              <span className="h-2 w-2 rounded-full bg-blue-500 dark:bg-blue-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+                              <span className="h-2 w-2 rounded-full bg-blue-500 dark:bg-blue-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+                              <span className="h-2 w-2 rounded-full bg-blue-500 dark:bg-blue-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                            </div>
+                          ) : (
+                            renderMarkdown(msg.content)
+                          )}
+                        </div>
+
+                        {/* Citations references */}
+                        {!isUser && msg.sources && msg.sources.length > 0 && (
+                          <button
+                            onClick={() => setActiveDrawerSources(msg.sources || null)}
+                            className="inline-flex items-center gap-1.5 text-xs text-green-600 hover:text-green-700 bg-green-500/10 dark:bg-green-500/5 border border-green-500/20 dark:border-green-800/30 px-2.5 py-1 rounded-full cursor-pointer hover:bg-green-500/20 transition-all"
+                          >
+                            <Info className="h-3 w-3" />
+                            Grounded in {msg.sources.length} document sources · Click to inspect
+                          </button>
+                        )}
+
+                        {/* Token Usage references */}
+                        {!isUser && msg.tokenUsage && (
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1.5 pl-1.5 text-[10px] text-slate-400 dark:text-slate-500 font-mono select-none">
+                            <span className="flex items-center gap-1">
+                              <Cpu className="h-2.5 w-2.5 text-slate-400 dark:text-slate-500" />
+                              Context: {msg.tokenUsage.prompt_tokens.toLocaleString()} / 8,192 tokens ({Math.min(100, Math.round((msg.tokenUsage.prompt_tokens / 8192) * 100))}% used)
+                            </span>
+                            <span>·</span>
+                            <span>Response: {msg.tokenUsage.eval_tokens.toLocaleString()} tokens</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {isUser && (
+                        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-slate-200 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-350">
+                          <MessageSquare className="h-4 w-4" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+              <div ref={messagesEndRef} />
             </div>
 
-            <aside className="rounded-lg border border-[#d9d6cc] bg-white p-4 shadow-sm">
-              <h2 className="text-base font-semibold">Retrieved Sources</h2>
-              <div className="mt-3 grid gap-3">
-                {lastSources.length === 0 ? (
-                  <p className="text-sm text-[#65655f]">
-                    Sources will appear here after the first question.
-                  </p>
-                ) : (
-                  lastSources.map((sourceItem, index) => (
-                    <details
-                      key={sourceItem.id}
-                      className="rounded-md border border-[#e3e0d8] bg-[#fcfcfa] p-3"
+            {/* Input Bar Section */}
+            <footer className="bg-background px-6 py-4">
+              <form onSubmit={handleSendMessage} className="mx-auto max-w-4xl relative">
+                <div className="relative flex items-center bg-slate-100 dark:bg-slate-800 border border-custom-border rounded-3xl px-4 py-2.5 focus-within:border-slate-300 dark:focus-within:border-slate-700 transition-all shadow-sm">
+                  {/* Paperclip attachment triggers hidden upload input */}
+                  <button
+                    type="button"
+                    disabled={isUploading}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="p-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-700/50 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isUploading ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+                    ) : (
+                      <Paperclip className="h-5 w-5 hover:rotate-12 transition-transform" />
+                    )}
+                  </button>
+
+                  {/* Glowing Brain Reasoning Level Selector */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setDropdownOpen((prev) => !prev)}
+                      className="flex items-center gap-1.5 border border-custom-border bg-white dark:bg-slate-900 rounded-xl px-2.5 py-1 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer select-none"
                     >
-                      <summary className="cursor-pointer text-sm font-medium">
-                        Source {index + 1} · similarity {sourceItem.similarity.toFixed(3)}
-                      </summary>
-                      <p className="mt-2 text-xs text-[#686862]">
-                        {String(sourceItem.metadata?.source ?? "pasted text")} · chunk{" "}
-                        {String(sourceItem.metadata?.chunkIndex ?? sourceItem.id)}
-                        {sourceItem.metadata?.page ? ` · page ${String(sourceItem.metadata.page)}` : ""}
-                      </p>
-                      <p className="mt-3 line-clamp-5 text-sm leading-6 text-[#353530]">
-                        {sourceItem.content}
-                      </p>
-                    </details>
-                  ))
-                )}
+                      <div
+                        title={`AI Reasoning Level: ${thinkLevel.toUpperCase()}`}
+                        className={`p-0.5 rounded-lg flex items-center justify-center ${
+                          thinkLevel !== "none" ? "text-blue-500" : "text-slate-400"
+                        }`}
+                      >
+                        <Brain className={`h-4.5 w-4.5 ${thinkLevel !== "none" && thinkLevel !== "low" ? "animate-pulse" : ""}`} />
+                      </div>
+                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-350 font-sans flex items-center gap-1">
+                        {thinkLevel === "none" && "⚡ Fast"}
+                        {thinkLevel === "low" && "🧠 Low"}
+                        {thinkLevel === "medium" && "🧠🧠 Medium"}
+                        {thinkLevel === "max" && "🧠🧠🧠 Max"}
+                        <ChevronDown className={`h-3 w-3 text-slate-400 transition-transform duration-200 ${dropdownOpen ? "rotate-180" : ""}`} />
+                      </span>
+                    </button>
+
+                    {/* Premium Custom Dropdown Menu */}
+                    {dropdownOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40 cursor-default"
+                          onClick={() => setDropdownOpen(false)}
+                        />
+                        <div className="absolute bottom-full mb-2 left-0 z-50 min-w-[200px] overflow-hidden rounded-2xl border border-custom-border bg-white dark:bg-slate-900 p-1.5 shadow-2xl transition-all duration-155 ease-out">
+                          <div className="px-2.5 py-1.5 text-[9px] font-bold tracking-wider text-slate-400 uppercase font-mono border-b border-custom-border mb-1">
+                            AI Reasoning Depth
+                          </div>
+                          {[
+                            { value: "none", label: "⚡ Fast", desc: "Instant response, no thinking" },
+                            { value: "low", label: "🧠 Low", desc: "1-sentence quiet reasoning" },
+                            { value: "medium", label: "🧠🧠 Medium", desc: "Short, structured logic" },
+                            { value: "max", label: "🧠🧠🧠 Max", desc: "Exhaustive deep thinking" },
+                          ].map((opt) => (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              onClick={() => {
+                                setThinkLevel(opt.value as any);
+                                setDropdownOpen(false);
+                              }}
+                              className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${
+                                thinkLevel === opt.value
+                                  ? "bg-slate-100 dark:bg-slate-800 text-foreground font-semibold"
+                                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-850 hover:text-slate-900 dark:hover:text-slate-100"
+                              }`}
+                            >
+                              <span>{opt.label}</span>
+                              <span className="text-[10px] text-slate-400 font-normal">
+                                {opt.desc}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Premium RAG Search Depth Selector */}
+                  {/* Premium RAG Search Depth Selector */}
+                  <div className="relative ml-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSearchDepthOpen((prev) => !prev)}
+                      className="flex items-center gap-1.5 border border-custom-border bg-white dark:bg-slate-900 rounded-xl px-2.5 py-1 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer select-none"
+                    >
+                      <div
+                        title={`Search Depth: ${searchDepth.toUpperCase()}`}
+                        className={`p-0.5 rounded-lg flex items-center justify-center ${
+                          searchDepth === "deep" ? "text-green-500 animate-pulse" : searchDepth === "fast" ? "text-amber-500" : "text-blue-500"
+                        }`}
+                      >
+                        <Database className="h-4 w-4" />
+                      </div>
+                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-350 font-sans flex items-center gap-1">
+                        {searchDepth === "fast" && "⚡ Fast (4)"}
+                        {searchDepth === "balanced" && "🔍 Balanced (8)"}
+                        {searchDepth === "deep" && "🧠 Deep (12)"}
+                        <ChevronDown className={`h-3 w-3 text-slate-400 transition-transform duration-200 ${searchDepthOpen ? "rotate-180" : ""}`} />
+                      </span>
+                    </button>
+
+                    {searchDepthOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40 cursor-default"
+                          onClick={() => setSearchDepthOpen(false)}
+                        />
+                        <div className="absolute bottom-full mb-2 left-0 z-50 min-w-[220px] overflow-hidden rounded-2xl border border-custom-border bg-white dark:bg-slate-900 p-1.5 shadow-2xl transition-all duration-155 ease-out">
+                          <div className="px-2.5 py-1.5 text-[9px] font-bold tracking-wider text-slate-400 uppercase font-mono border-b border-custom-border mb-1">
+                            RAG Search Context
+                          </div>
+                          {[
+                            { value: "fast", label: "⚡ Fast Context", desc: "Retrieve top 4 chunks (Maximum speed)" },
+                            { value: "balanced", label: "🔍 Balanced Context", desc: "Retrieve top 8 chunks (Ideal precision)" },
+                            { value: "deep", label: "🧠 Deep Research", desc: "Retrieve top 12 chunks (Maximum context depth)" },
+                          ].map((opt) => (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              onClick={() => {
+                                setSearchDepth(opt.value as any);
+                                setSearchDepthOpen(false);
+                              }}
+                              className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${
+                                searchDepth === opt.value
+                                  ? "bg-slate-100 dark:bg-slate-800 text-foreground font-semibold"
+                                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-850 hover:text-slate-900 dark:hover:text-slate-100"
+                              }`}
+                            >
+                              <span>{opt.label}</span>
+                              <span className="text-[10px] text-slate-400 font-normal">
+                                {opt.desc}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="application/pdf,.pdf,.txt"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+
+                  <input
+                    value={question}
+                    disabled={isAsking}
+                    onChange={(e) => setQuestion(e.target.value)}
+                    placeholder="Ask a question grounded in your session's index..."
+                    className="flex-1 bg-transparent px-3 text-sm text-foreground outline-none placeholder-slate-400 dark:placeholder-slate-500 disabled:opacity-50"
+                  />
+
+                  {isAsking ? (
+                    <button
+                      type="button"
+                      onClick={stopGeneration}
+                      className="bg-red-600 hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700 text-white p-2 rounded-xl transition-all shadow-sm cursor-pointer hover:scale-105"
+                      title="Stop generating"
+                    >
+                      <Square className="h-4 w-4 fill-white text-white" />
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={!question.trim()}
+                      className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 text-white p-2 rounded-xl transition-all disabled:bg-slate-100 dark:disabled:bg-slate-800 disabled:text-slate-400 disabled:cursor-not-allowed shadow-sm cursor-pointer"
+                    >
+                      <Send className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              </form>
+            </footer>
+          </>
+        ) : (
+          /* Documents Management Dashboard Tab View */
+          <div className="flex-1 overflow-y-auto p-8 max-w-5xl mx-auto w-full">
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h2 className="text-xl font-bold text-foreground">Knowledge Hub</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                  Manage vector documents stored in your local indexing database.
+                </p>
               </div>
-            </aside>
-          </section>
-        </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => globalFileInputRef.current?.click()}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-700 shadow-sm transition-all cursor-pointer"
+                >
+                  Upload Global Document
+                </button>
+                <button
+                  onClick={fetchUploadedDocs}
+                  className="inline-flex items-center gap-2 rounded-lg border border-custom-border bg-white dark:bg-slate-900 px-3.5 py-2 text-xs font-semibold text-foreground hover:bg-slate-50 dark:hover:bg-slate-800 shadow-sm transition-all cursor-pointer"
+                >
+                  Refresh Index
+                </button>
+                <input
+                  ref={globalFileInputRef}
+                  type="file"
+                  accept="application/pdf,.pdf,.txt"
+                  onChange={handleGlobalFileUpload}
+                  className="hidden"
+                />
+              </div>
+            </div>
+
+            {isLoadingDocs ? (
+              <div className="flex h-64 flex-col items-center justify-center gap-3">
+                <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+                <span className="text-sm font-medium text-slate-500 dark:text-slate-400 font-mono">Scanning vector collections...</span>
+              </div>
+            ) : uploadedDocs.length === 0 ? (
+              <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-custom-border bg-white dark:bg-slate-900 p-8 text-center">
+                <BookOpen className="h-10 w-10 text-slate-350 dark:text-slate-500 mb-3 animate-pulse" />
+                <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300">No documents indexed</h4>
+                <p className="text-xs text-slate-450 dark:text-slate-450 max-w-sm mt-1">
+                  Upload PDF, DOCX, or text files directly inside chat sessions to populate your knowledge library.
+                </p>
+              </div>
+            ) : (
+              <div className="bg-white dark:bg-slate-900 border border-custom-border rounded-2xl overflow-hidden shadow-sm">
+                <table className="w-full border-collapse text-left text-sm text-slate-600 dark:text-slate-400">
+                  <thead className="bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-350 uppercase font-mono text-[10px] tracking-wider border-b border-custom-border">
+                    <tr>
+                      <th className="px-6 py-4 font-semibold">Document Name</th>
+                      <th className="px-6 py-4 font-semibold">Scope / Session</th>
+                      <th className="px-6 py-4 font-semibold">Vectors</th>
+                      <th className="px-6 py-4 font-semibold">Indexed At</th>
+                      <th className="px-6 py-4 font-semibold text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-custom-border">
+                    {uploadedDocs.map((doc, idx) => {
+                      const isGlobal = !doc.session_id;
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-colors">
+                          <td className="px-6 py-4.5 font-medium text-foreground max-w-xs truncate" title={doc.filename}>
+                            {doc.filename}
+                          </td>
+                          <td className="px-6 py-4.5">
+                            {isGlobal ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-100 dark:border-emerald-900/50">
+                                🌐 Global
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded-full border border-blue-100 dark:border-blue-900/50 max-w-[140px] truncate" title={doc.session_id || ""}>
+                                🔒 Session-Bound
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4.5 font-mono text-xs">
+                            {doc.chunk_count} chunks
+                          </td>
+                          <td className="px-6 py-4.5 text-xs text-slate-400 font-mono">
+                            {doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleString() : "N/A"}
+                          </td>
+                          <td className="px-6 py-4.5 text-right">
+                            <button
+                              onClick={() => handleDeleteDoc(doc.filename, doc.session_id)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all cursor-pointer"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </section>
+
+      {/* 3. SLIDING DRAWER: Inspect Matched Vector Citations */}
+      {activeDrawerSources && (
+        <section className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="h-full w-full max-w-xl bg-white dark:bg-[#171717] border-l border-custom-border shadow-2xl flex flex-col animate-slide-in">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-5 border-b border-custom-border">
+              <div className="flex items-center gap-2">
+                <BookOpen className="h-5 w-5 text-green-600" />
+                <h3 className="font-semibold text-foreground">Retrieved Citations</h3>
+              </div>
+              <button
+                onClick={() => setActiveDrawerSources(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-250 cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* List of matched vector chunks */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {activeDrawerSources.map((source, idx) => (
+                <div
+                  key={source.id}
+                  className="rounded-xl border border-custom-border bg-slate-50/50 dark:bg-slate-900/30 p-4 hover:border-green-500/30 transition-all duration-200"
+                >
+                  {/* Metadata */}
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs text-green-600 bg-green-500/10 px-2 py-0.5 rounded font-mono">
+                      Chunk {idx + 1} · Match {(source.similarity * 100).toFixed(1)}%
+                    </span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                      File: {source.metadata?.source || "Pasted text"}{" "}
+                      {source.metadata?.page ? `· Page ${source.metadata.page}` : ""}
+                    </span>
+                  </div>
+
+                  {/* Extract Text */}
+                  <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed bg-white dark:bg-[#212121] p-3 rounded-lg border border-custom-border font-mono select-text whitespace-pre-wrap max-h-56 overflow-y-auto">
+                    {source.content}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
     </main>
   );
 }

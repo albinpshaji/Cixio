@@ -6,9 +6,10 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_chat_model: str = "qwen3.5:4b"
     ollama_embed_model: str = "nomic-embed-text"
-    retrieval_limit: int = 5
-    generation_timeout_ms: int = 60000
-    generation_max_tokens: int = 384
+    retrieval_limit: int = 8
+    ollama_num_ctx: int = 8192
+    generation_timeout_ms: int = 300000
+    generation_max_tokens: int = 4096
     embedding_dimensions: int = 768
     cors_origins: list[str] = ["http://localhost:3000"]
 

@@ -1,6 +1,20 @@
 from typing import Any
-
+from datetime import datetime
 from pydantic import BaseModel, Field
+
+
+class SessionCreate(BaseModel):
+    title: str | None = None
+
+
+class SessionUpdate(BaseModel):
+    title: str
+
+
+class SessionResponse(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
 
 
 class IngestRequest(BaseModel):
@@ -23,6 +37,9 @@ class UploadResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1)
     sessionId: str | None = None
+    think: bool = True
+    think_level: str = "medium"
+    search_depth: str = "balanced"
 
 
 class RetrievedChunk(BaseModel):
@@ -39,3 +56,21 @@ class ChatResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: str
+
+
+class MessageResponse(BaseModel):
+    id: str
+    session_id: str
+    role: str
+    content: str
+    sources: list[RetrievedChunk]
+    thoughts: str | None = None
+    token_usage: dict[str, int] | None = None
+    created_at: datetime
+
+
+class DocumentItem(BaseModel):
+    filename: str
+    chunk_count: int
+    uploaded_at: str | None = None
+    session_id: str | None = None
