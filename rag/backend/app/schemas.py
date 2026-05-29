@@ -74,3 +74,32 @@ class DocumentItem(BaseModel):
     chunk_count: int
     uploaded_at: str | None = None
     session_id: str | None = None
+
+
+class UserRegister(BaseModel):
+    email: str
+    full_name: str
+    password: str = Field(min_length=6)
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    full_name: str
+    avatar_url: str | None = None
+    created_at: datetime
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str

@@ -2,20 +2,36 @@ from app.schemas import RetrievedChunk
 
 
 def build_rag_prompt(question: str, chunks: list[RetrievedChunk], think_level: str = "medium") -> str:
-    context_parts: list[str] = []
-
+    # Group chunks by their source document
+    grouped_chunks: dict[str, list[tuple[int, RetrievedChunk]]] = {}
     for index, chunk in enumerate(chunks):
         metadata = chunk.metadata or {}
         source = metadata.get("source", "pasted text")
-        chunk_index = metadata.get("chunkIndex", chunk.id)
-        page = metadata.get("page")
-        location = f"page {page}, chunk {chunk_index}" if page else f"chunk {chunk_index}"
+        if source not in grouped_chunks:
+            grouped_chunks[source] = []
+        grouped_chunks[source].append((index + 1, chunk))
+
+    context_parts: list[str] = []
+    for source, source_chunks in grouped_chunks.items():
+        chunk_texts: list[str] = []
+        for src_num, chunk in source_chunks:
+            metadata = chunk.metadata or {}
+            chunk_index = metadata.get("chunkIndex", chunk.id)
+            page = metadata.get("page")
+            location = f"page {page}, chunk {chunk_index}" if page else f"chunk {chunk_index}"
+            chunk_texts.append(
+                f"[Source {src_num} ({location}, similarity {chunk.similarity:.3f})]:\n{chunk.content}"
+            )
+        
+        chunks_joined = "\n\n".join(chunk_texts)
         context_parts.append(
-            f"Source {index + 1} ({source}, {location}, "
-            f"similarity {chunk.similarity:.3f}):\n{chunk.content}"
+            f"========================================\n"
+            f"📄 DOCUMENT REFERENCE: {source.upper()}\n"
+            f"========================================\n"
+            f"{chunks_joined}"
         )
 
-    context = "\n\n---\n\n".join(context_parts)
+    context = "\n\n".join(context_parts)
 
     reasoning_instructions = ""
     if think_level == "low":
@@ -28,6 +44,8 @@ def build_rag_prompt(question: str, chunks: list[RetrievedChunk], think_level: s
     instructions = [
         "You are a careful document question-answering assistant.",
         "Use only the provided context to answer the user's question.",
+        "Do NOT mix, combine, or cross-contaminate information between different documents.",
+        "Keep each document's details strictly isolated and separate.",
         "If the context does not contain enough information, say that the document context does not provide enough information.",
         "Be concise, specific, and cite the source numbers you used.",
     ]

@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, Form, Request
+from fastapi import FastAPI, File, HTTPException, UploadFile, Form, Request, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg.types.json import Jsonb
 
+from app.auth import get_current_user, init_auth_tables, router as auth_router
 from app.chunking import chunk_text
 from app.config import settings
 from app.db import close_pool, open_pool, pool
@@ -51,6 +52,10 @@ def init_db():
                 );
                 """
             )
+            # Add user_id column to chat_sessions
+            cursor.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE")
+            # Add user_id column to documents
+            cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE")
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -75,6 +80,7 @@ async def lifespan(app: FastAPI):
     open_pool()
     try:
         init_db()
+        init_auth_tables()
         yield
     finally:
         close_pool()
@@ -94,6 +100,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -105,9 +113,9 @@ def clean_source(source: str | None, fallback: str = "pasted text") -> str:
     return value or fallback
 
 
-def store_chunks(chunks: list[ChunkToStore]) -> None:
+def store_chunks(chunks: list[ChunkToStore], user_id: str | None = None) -> None:
     ingested_at = datetime.now(timezone.utc).isoformat()
-    embedded_chunks: list[tuple[str, Jsonb, str]] = []
+    embedded_chunks: list[tuple[str, Jsonb, str, str | None]] = []
 
     for chunk in chunks:
         embedding = create_embedding(chunk.content)
@@ -116,6 +124,7 @@ def store_chunks(chunks: list[ChunkToStore]) -> None:
                 chunk.content,
                 Jsonb({**chunk.metadata, "ingestedAt": ingested_at}),
                 to_pg_vector(embedding),
+                user_id,
             )
         )
 
@@ -124,15 +133,18 @@ def store_chunks(chunks: list[ChunkToStore]) -> None:
             with connection.cursor() as cursor:
                 cursor.executemany(
                     """
-                    INSERT INTO documents (content, metadata, embedding)
-                    VALUES (%s, %s::jsonb, %s::vector)
+                    INSERT INTO documents (content, metadata, embedding, user_id)
+                    VALUES (%s, %s::jsonb, %s::vector, %s::uuid)
                     """,
                     embedded_chunks,
                 )
 
 
 @app.post("/api/ingest", response_model=IngestResponse)
-def ingest_document(request: IngestRequest) -> IngestResponse:
+def ingest_document(
+    request: IngestRequest,
+    current_user: dict = Depends(get_current_user)
+) -> IngestResponse:
     text = request.text.strip()
 
     if not text:
@@ -157,7 +169,7 @@ def ingest_document(request: IngestRequest) -> IngestResponse:
     ]
 
     try:
-        store_chunks(chunks_to_store)
+        store_chunks(chunks_to_store, user_id=current_user["id"])
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
 
@@ -167,7 +179,8 @@ def ingest_document(request: IngestRequest) -> IngestResponse:
 @app.post("/api/upload", response_model=UploadResponse)
 def upload_pdf(
     file: UploadFile = File(...),
-    sessionId: str | None = Form(None)
+    sessionId: str | None = Form(None),
+    current_user: dict = Depends(get_current_user)
 ) -> UploadResponse:
     source, pages, pdf_chunks = extract_pdf_chunks(file)
     chunks_to_store = [
@@ -185,7 +198,7 @@ def upload_pdf(
     ]
 
     try:
-        store_chunks(chunks_to_store)
+        store_chunks(chunks_to_store, user_id=current_user["id"])
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
 
@@ -193,9 +206,14 @@ def upload_pdf(
 
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest, raw_request: Request):
+async def chat(
+    request: ChatRequest,
+    raw_request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     question = request.question.strip()
     sessionId = request.sessionId
+    user_id = current_user["id"]
 
     if not question:
         raise HTTPException(status_code=400, detail="Question is required.")
@@ -206,18 +224,23 @@ async def chat(request: ChatRequest, raw_request: Request):
             with pool.connection() as connection:
                 with connection.cursor() as cursor:
                     # Check if session exists, otherwise create it
-                    cursor.execute("SELECT id FROM chat_sessions WHERE id = %s", (sessionId,))
-                    if not cursor.fetchone():
+                    cursor.execute("SELECT id, user_id FROM chat_sessions WHERE id = %s", (sessionId,))
+                    row = cursor.fetchone()
+                    if not row:
                         cursor.execute(
-                            "INSERT INTO chat_sessions (id, title) VALUES (%s, %s)",
-                            (sessionId, question[:50] or "Chat Session"),
+                            "INSERT INTO chat_sessions (id, title, user_id) VALUES (%s, %s, %s)",
+                            (sessionId, question[:50] or "Chat Session", user_id),
                         )
+                    elif str(row[1]) != user_id:
+                        raise HTTPException(status_code=403, detail="Unauthorized access to chat session.")
                     # Save user query
                     cursor.execute(
                         "INSERT INTO chat_messages (session_id, role, content, sources) VALUES (%s, %s, %s, %s)",
                         (sessionId, "user", question, Jsonb([])),
                     )
                     connection.commit()
+        except HTTPException:
+            raise
         except Exception as db_err:
             print(f"[DB Error] Failed to save user query: {db_err}")
 
@@ -229,7 +252,7 @@ async def chat(request: ChatRequest, raw_request: Request):
             limit = 12
         else:
             limit = 8
-        sources = retrieve_relevant_chunks(question, sessionId=sessionId, limit=limit)
+        sources = retrieve_relevant_chunks(question, sessionId=sessionId, limit=limit, user_id=user_id)
     except Exception as retrieve_err:
         print(f"[Retrieve Error] Failed: {retrieve_err}")
         sources = []
@@ -337,22 +360,25 @@ async def chat(request: ChatRequest, raw_request: Request):
 
 
 @app.get("/api/sessions", response_model=list[SessionResponse])
-def list_sessions():
+def list_sessions(current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, title, created_at FROM chat_sessions ORDER BY created_at DESC")
+            cursor.execute(
+                "SELECT id, title, created_at FROM chat_sessions WHERE user_id = %s ORDER BY created_at DESC",
+                (current_user["id"],)
+            )
             rows = cursor.fetchall()
             return [SessionResponse(id=str(row[0]), title=row[1], created_at=row[2]) for row in rows]
 
 
 @app.post("/api/sessions", response_model=SessionResponse, status_code=201)
-def create_session(request: SessionCreate):
+def create_session(request: SessionCreate, current_user: dict = Depends(get_current_user)):
     title = request.title.strip() if request.title else "New Chat"
     with pool.connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO chat_sessions (title) VALUES (%s) RETURNING id, title, created_at",
-                (title,),
+                "INSERT INTO chat_sessions (title, user_id) VALUES (%s, %s) RETURNING id, title, created_at",
+                (title, current_user["id"]),
             )
             row = cursor.fetchone()
             connection.commit()
@@ -360,12 +386,20 @@ def create_session(request: SessionCreate):
 
 
 @app.put("/api/sessions/{session_id}", response_model=SessionResponse)
-def update_session(session_id: str, request: SessionUpdate):
+def update_session(session_id: str, request: SessionUpdate, current_user: dict = Depends(get_current_user)):
     title = request.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Title cannot be empty")
     with pool.connection() as connection:
         with connection.cursor() as cursor:
+            # Check ownership first
+            cursor.execute("SELECT user_id FROM chat_sessions WHERE id = %s", (session_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Session not found")
+            if str(row[0]) != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Unauthorized access to this session")
+
             cursor.execute(
                 "UPDATE chat_sessions SET title = %s WHERE id = %s RETURNING id, title, created_at",
                 (title, session_id),
@@ -378,18 +412,34 @@ def update_session(session_id: str, request: SessionUpdate):
 
 
 @app.delete("/api/sessions/{session_id}")
-def delete_session(session_id: str):
+def delete_session(session_id: str, current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:
+            # Check ownership first
+            cursor.execute("SELECT user_id FROM chat_sessions WHERE id = %s", (session_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Session not found")
+            if str(row[0]) != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Unauthorized access to this session")
+
             cursor.execute("DELETE FROM chat_sessions WHERE id = %s", (session_id,))
             connection.commit()
     return {"status": "success", "message": "Session deleted"}
 
 
 @app.get("/api/sessions/{session_id}/messages", response_model=list[MessageResponse])
-def list_messages(session_id: str):
+def list_messages(session_id: str, current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:
+            # Check ownership first
+            cursor.execute("SELECT user_id FROM chat_sessions WHERE id = %s", (session_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Session not found")
+            if str(row[0]) != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Unauthorized access to this session")
+
             cursor.execute(
                 "SELECT id, session_id, role, content, thoughts, token_usage, sources, created_at FROM chat_messages WHERE session_id = %s ORDER BY created_at ASC",
                 (session_id,),
@@ -419,7 +469,7 @@ def list_messages(session_id: str):
 
 
 @app.get("/api/documents", response_model=list[DocumentItem])
-def list_documents():
+def list_documents(current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -430,9 +480,11 @@ def list_documents():
                     max(metadata->>'ingestedAt') AS uploaded_at,
                     metadata->>'sessionId' AS session_id
                 FROM documents
+                WHERE user_id = %s
                 GROUP BY metadata->>'source', metadata->>'sessionId'
                 ORDER BY uploaded_at DESC
-                """
+                """,
+                (current_user["id"],)
             )
             rows = cursor.fetchall()
             return [
@@ -447,18 +499,18 @@ def list_documents():
 
 
 @app.delete("/api/documents")
-def delete_document(filename: str, sessionId: str | None = None):
+def delete_document(filename: str, sessionId: str | None = None, current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:
             if sessionId and sessionId != "null" and sessionId != "undefined":
                 cursor.execute(
-                    "DELETE FROM documents WHERE metadata->>'source' = %s AND metadata->>'sessionId' = %s",
-                    (filename, sessionId),
+                    "DELETE FROM documents WHERE metadata->>'source' = %s AND metadata->>'sessionId' = %s AND user_id = %s",
+                    (filename, sessionId, current_user["id"]),
                 )
             else:
                 cursor.execute(
-                    "DELETE FROM documents WHERE metadata->>'source' = %s AND (metadata->>'sessionId' IS NULL OR metadata->>'sessionId' = 'null')",
-                    (filename,),
+                    "DELETE FROM documents WHERE metadata->>'source' = %s AND (metadata->>'sessionId' IS NULL OR metadata->>'sessionId' = 'null') AND user_id = %s",
+                    (filename, current_user["id"]),
                 )
             connection.commit()
     return {"status": "success", "message": f"Document {filename} deleted successfully."}
