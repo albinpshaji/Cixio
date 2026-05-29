@@ -1,0 +1,7 @@
+fastapi==0.115.6
+httpx==0.28.1
+psycopg[binary,pool]==3.3.4
+pypdf>=6.0.0
+pydantic-settings==2.7.1
+python-multipart>=0.0.20
+uvicorn[standard]==0.34.0

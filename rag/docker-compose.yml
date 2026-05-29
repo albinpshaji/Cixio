@@ -1,0 +1,19 @@
+services:
+  postgres:
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    image: rag-postgres-pgvector:latest
+    container_name: rag-postgres
+    restart: unless-stopped
+    network_mode: host
+    command: ["postgres", "-p", "5433"]
+    environment:
+      POSTGRES_DB: rag_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: albin
+    volumes:
+      - rag_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  rag_postgres_data:
