@@ -219,6 +219,39 @@ def upload_pdf(
     sessionId: str | None = Form(None),
     current_user: dict = Depends(get_current_user)
 ) -> UploadResponse:
+    source_filename = file.filename
+    if source_filename:
+        from app.db import pool
+        with pool.connection() as connection:
+            with connection.cursor() as cursor:
+                if sessionId:
+                    cursor.execute(
+                        """
+                        SELECT 1 FROM documents 
+                        WHERE user_id = %s 
+                          AND metadata->>'source' = %s 
+                          AND metadata->>'sessionId' = %s
+                        LIMIT 1
+                        """,
+                        (current_user["id"], source_filename, sessionId)
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT 1 FROM documents 
+                        WHERE user_id = %s 
+                          AND metadata->>'source' = %s 
+                          AND (metadata->>'sessionId' IS NULL OR metadata->>'sessionId' = 'null')
+                        LIMIT 1
+                        """,
+                        (current_user["id"], source_filename)
+                    )
+                if cursor.fetchone():
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"A document named '{source_filename}' already exists here. Please delete the old one or rename your file before uploading."
+                    )
+
     source, pages, pdf_chunks = extract_document_chunks(file)
     chunks_to_store = [
         ChunkToStore(
@@ -290,7 +323,7 @@ async def chat(
             limit = 12
         else:
             limit = 8
-        sources = retrieve_relevant_chunks(question, sessionId=sessionId, limit=limit, user_id=user_id, hyde=request.hyde)
+        sources = retrieve_relevant_chunks(question, sessionId=sessionId, limit=limit, user_id=user_id, hyde=request.hyde, priority_docs=request.priority_docs)
     except Exception as retrieve_err:
         print(f"[Retrieve Error] Failed: {retrieve_err}")
         sources = []

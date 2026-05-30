@@ -41,6 +41,7 @@ class ChatRequest(BaseModel):
     think_level: str = "medium"
     search_depth: str = "balanced"
     hyde: bool = False
+    priority_docs: list[str] = Field(default_factory=list)
 
 
 class RetrievedChunk(BaseModel):

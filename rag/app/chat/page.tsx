@@ -25,6 +25,7 @@ import {
   Square,
   LayoutDashboard,
   LogOut,
+  Target,
 } from "lucide-react";
 import { getAccessToken, getCurrentUser, logoutUser, authFetch } from "@/app/lib/auth";
 
@@ -129,6 +130,8 @@ export default function ChatPage() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [activeTab, setActiveTab] = useState<"chat" | "documents">("chat");
   const [hydeEnabled, setHydeEnabled] = useState(false);
+  const [priorityDocs, setPriorityDocs] = useState<string[]>([]);
+  const [priorityDocsOpen, setPriorityDocsOpen] = useState(false);
 
   // Read active tab query param on mount
   useEffect(() => {
@@ -241,13 +244,16 @@ export default function ChatPage() {
         body: formData,
       });
 
-      if (!res.ok) throw new Error("Upload failed");
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.detail || "Upload failed");
+      }
 
       // Refresh list of documents
       await fetchUploadedDocs();
-    } catch (err) {
-      console.error("Failed to upload global document", err);
-      alert("Failed to upload global document. Please check backend connection.");
+    } catch (err: any) {
+      console.warn("Failed to upload global document", err);
+      alert(`Upload Failed: ${err.message || "Please check backend connection."}`);
     } finally {
       setIsLoadingDocs(false);
       if (globalFileInputRef.current) {
@@ -270,11 +276,10 @@ export default function ChatPage() {
     }
   }
 
+  // Fetch uploaded documents on initial mount so the target dropdown is populated
   useEffect(() => {
-    if (activeTab === "documents") {
-      fetchUploadedDocs();
-    }
-  }, [activeTab]);
+    fetchUploadedDocs();
+  }, []);
 
   // Auto-scroll chat window only if the user is already near the bottom
   const scrollToBottom = (force = false) => {
@@ -415,7 +420,10 @@ export default function ChatPage() {
         body: formData,
       });
 
-      if (!res.ok) throw new Error("Upload failed");
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.detail || "Upload failed");
+      }
 
       const data = await res.json();
 
@@ -430,6 +438,9 @@ export default function ChatPage() {
             : msg
         )
       );
+
+      // Refresh the uploaded documents list so it appears in the Target dropdown immediately
+      await fetchUploadedDocs();
 
       // Auto update sidebar title if it was default
       const activeSession = sessions.find((s) => s.id === activeSessionId);
@@ -446,13 +457,13 @@ export default function ChatPage() {
           body: JSON.stringify({ title: newTitle }),
         }).catch((err) => console.error("Failed to persist session title:", err));
       }
-    } catch (err) {
+    } catch (err: any) {
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === tempSystemId
             ? {
                 ...msg,
-                content: `❌ Ingestion failed for "${file.name}". Please make sure the backend is active and accepts the file type.`,
+                content: `❌ Ingestion failed for "${file.name}". ${err.message || "Please make sure the backend is active."}`,
               }
             : msg
         )
@@ -494,6 +505,7 @@ export default function ChatPage() {
           think_level: thinkLevel,
           search_depth: searchDepth,
           hyde: hydeEnabled,
+          priority_docs: priorityDocs.map(id => id.split("::")[0]),
         }),
         signal: controller.signal,
       });
@@ -1124,6 +1136,97 @@ export default function ChatPage() {
                                   </span>
                                 </button>
                               ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Priority Documents Selector */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setPriorityDocsOpen((prev) => !prev)}
+                          className={`flex items-center gap-1.5 border rounded-xl px-2.5 py-1 shadow-sm transition-all cursor-pointer select-none ${
+                            priorityDocs.length > 0
+                              ? "border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/40"
+                              : "border-custom-border bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
+                          }`}
+                          title="Target specific documents to prioritize their content"
+                        >
+                          <Target className={`h-4 w-4 ${priorityDocs.length > 0 ? "text-indigo-500" : "text-slate-400"}`} />
+                          <span className="text-[11px] font-semibold font-sans">
+                            {priorityDocs.length > 0 ? `🎯 ${priorityDocs.length} Targeted` : "🎯 Target Docs"}
+                          </span>
+                        </button>
+
+                        {/* Dropdown Menu */}
+                        {priorityDocsOpen && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-40 cursor-default"
+                              onClick={() => setPriorityDocsOpen(false)}
+                            />
+                            <div className="absolute bottom-full mb-2 left-0 z-50 w-64 max-h-64 overflow-y-auto rounded-2xl border border-custom-border bg-white dark:bg-slate-900 p-1.5 shadow-2xl transition-all duration-150 ease-out scrollbar-thin">
+                              <div className="px-2.5 py-1.5 flex justify-between items-center border-b border-custom-border mb-1">
+                                <span className="text-[9px] font-bold tracking-wider text-slate-400 uppercase font-mono">
+                                  Prioritize Documents
+                                </span>
+                                {priorityDocs.length > 0 && (
+                                  <button
+                                    onClick={() => setPriorityDocs([])}
+                                    className="text-[9px] text-red-500 hover:text-red-600 font-semibold cursor-pointer"
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </div>
+                              {(() => {
+                                const visibleDocs = uploadedDocs.filter(d => !d.session_id || d.session_id === activeSessionId);
+                                if (visibleDocs.length === 0) {
+                                  return (
+                                    <div className="px-2.5 py-3 text-xs text-slate-400 text-center italic">
+                                      No documents applicable to this session
+                                    </div>
+                                  );
+                                }
+                                return visibleDocs.map((doc, idx) => {
+                                  const uid = `${doc.filename}::${doc.session_id || 'global'}`;
+                                  const isSelected = priorityDocs.includes(uid);
+                                  const isGlobal = !doc.session_id;
+                                  return (
+                                    <button
+                                      key={`${doc.filename}-${idx}`}
+                                      type="button"
+                                      onClick={() => {
+                                        setPriorityDocs((prev) => 
+                                          isSelected 
+                                            ? prev.filter((d) => d !== uid)
+                                            : [...prev, uid]
+                                        );
+                                      }}
+                                      className={`w-full text-left flex items-center justify-between rounded-xl px-2.5 py-2 text-xs transition-all cursor-pointer ${
+                                        isSelected
+                                          ? "bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 font-semibold"
+                                          : "text-slate-650 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100"
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-1.5 truncate pr-2">
+                                        <span className="truncate">{doc.filename}</span>
+                                        {isGlobal ? (
+                                          <span className="flex-shrink-0 text-[8px] font-bold px-1.5 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 rounded-sm">
+                                            G
+                                          </span>
+                                        ) : (
+                                          <span className="flex-shrink-0 text-[8px] font-bold px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 rounded-sm">
+                                            S
+                                          </span>
+                                        )}
+                                      </div>
+                                      {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-indigo-500 flex-shrink-0" />}
+                                    </button>
+                                  );
+                                });
+                              })()}
                             </div>
                           </>
                         )}

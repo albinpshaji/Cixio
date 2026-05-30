@@ -33,7 +33,10 @@ def generate_hyde_text(question: str) -> str:
         print(f"[HyDE Speed Warning] Failed, falling back to original query: {err}")
         return question
 
-def retrieve_relevant_chunks(question: str, sessionId: str | None = None, limit: int | None = None, user_id: str | None = None, hyde: bool = False) -> list[RetrievedChunk]:
+def retrieve_relevant_chunks(question: str, sessionId: str | None = None, limit: int | None = None, user_id: str | None = None, hyde: bool = False, priority_docs: list[str] = None) -> list[RetrievedChunk]:
+    if priority_docs is None:
+        priority_docs = []
+        
     hyde_text = None
     if hyde:
         hyde_text = generate_hyde_text(question)
@@ -49,12 +52,12 @@ def retrieve_relevant_chunks(question: str, sessionId: str | None = None, limit:
     if user_id:
         where_filter = {"user_id": str(user_id)}
 
-    # Query ChromaDB for top 50 matches for the user
+    # Query ChromaDB for top 100 matches for the user
     # We fetch more than the limit so we can apply python-side boosting and sorting
     try:
         results = collection.query(
             query_embeddings=[embedding],
-            n_results=50,
+            n_results=100,
             where=where_filter,
             include=["documents", "metadatas", "distances"]
         )
@@ -93,6 +96,13 @@ def retrieve_relevant_chunks(question: str, sessionId: str | None = None, limit:
         # Source/Filename Match Boost (+0.12)
         source = metadata.get("source", "")
         if source:
+            # Explicit Document Selection Boost
+            if source in priority_docs:
+                if chunk_session_id == sessionId:
+                    similarity += 0.20
+                else:
+                    similarity += 0.30
+                
             source_lower = source.lower()
             q_lower = question.lower()
             clean_source = source_lower.replace(".pdf", "").replace(".txt", "").replace(".docx", "")
