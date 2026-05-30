@@ -321,6 +321,8 @@ async def chat(
             limit = 4
         elif request.search_depth == "deep":
             limit = 12
+        elif request.search_depth == "max":
+            limit = 24
         else:
             limit = 8
         sources = retrieve_relevant_chunks(question, sessionId=sessionId, limit=limit, user_id=user_id, hyde=request.hyde, priority_docs=request.priority_docs)

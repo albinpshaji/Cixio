@@ -26,6 +26,7 @@ import {
   LayoutDashboard,
   LogOut,
   Target,
+  AlertTriangle,
 } from "lucide-react";
 import { getAccessToken, getCurrentUser, logoutUser, authFetch } from "@/app/lib/auth";
 
@@ -43,9 +44,9 @@ function parseBold(text: string) {
 
 function renderMarkdown(text: string) {
   if (!text) return null;
-  
+
   const lines = text.split("\n");
-  
+
   return lines.map((line, idx) => {
     if (line.startsWith("### ")) {
       return <h4 key={idx} className="text-base font-bold text-slate-800 dark:text-slate-100 mt-3 mb-1.5">{line.substring(4)}</h4>;
@@ -56,7 +57,7 @@ function renderMarkdown(text: string) {
     if (line.startsWith("# ")) {
       return <h2 key={idx} className="text-xl font-bold text-slate-800 dark:text-slate-100 mt-5 mb-3">{line.substring(2)}</h2>;
     }
-    
+
     const isBullet = line.trim().startsWith("* ") || line.trim().startsWith("- ");
     if (isBullet) {
       const bulletChar = line.includes("* ") ? "* " : "- ";
@@ -68,7 +69,7 @@ function renderMarkdown(text: string) {
         </ul>
       );
     }
-    
+
     return (
       <p key={idx} className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed my-1.5 min-h-[0.5rem]">
         {parseBold(line)}
@@ -125,13 +126,14 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [thinkLevel, setThinkLevel] = useState<"none" | "low" | "medium" | "max">("medium");
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [searchDepth, setSearchDepth] = useState<"fast" | "balanced" | "deep">("balanced");
+  const [searchDepth, setSearchDepth] = useState<"fast" | "balanced" | "deep" | "max">("balanced");
   const [searchDepthOpen, setSearchDepthOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [activeTab, setActiveTab] = useState<"chat" | "documents">("chat");
   const [hydeEnabled, setHydeEnabled] = useState(false);
   const [priorityDocs, setPriorityDocs] = useState<string[]>([]);
   const [priorityDocsOpen, setPriorityDocsOpen] = useState(false);
+  const [toast, setToast] = useState<{ title: string, message: string, type: "error" | "success" | "info" } | null>(null);
 
   // Read active tab query param on mount
   useEffect(() => {
@@ -253,7 +255,12 @@ export default function ChatPage() {
       await fetchUploadedDocs();
     } catch (err: any) {
       console.warn("Failed to upload global document", err);
-      alert(`Upload Failed: ${err.message || "Please check backend connection."}`);
+      setToast({
+        title: "Upload Failed",
+        message: err.message || "Please check backend connection.",
+        type: "error"
+      });
+      setTimeout(() => setToast(null), 6000);
     } finally {
       setIsLoadingDocs(false);
       if (globalFileInputRef.current) {
@@ -402,7 +409,7 @@ export default function ChatPage() {
     formData.append("sessionId", activeSessionId);
 
     setIsUploading(true);
-    
+
     // Add pending upload message to the chat
     const tempSystemId = `sys-${Date.now()}`;
     setMessages((prev) => [
@@ -432,9 +439,9 @@ export default function ChatPage() {
         prev.map((msg) =>
           msg.id === tempSystemId
             ? {
-                ...msg,
-                content: `📁 Document "${data.source}" successfully processed! Split into ${data.chunks} chunks across ${data.pages} pages. Dynamic RAG priority boosting is active.`,
-              }
+              ...msg,
+              content: `📁 Document "${data.source}" successfully processed! Split into ${data.chunks} chunks across ${data.pages} pages. Dynamic RAG priority boosting is active.`,
+            }
             : msg
         )
       );
@@ -462,9 +469,9 @@ export default function ChatPage() {
         prev.map((msg) =>
           msg.id === tempSystemId
             ? {
-                ...msg,
-                content: `❌ Ingestion failed for "${file.name}". ${err.message || "Please make sure the backend is active."}`,
-              }
+              ...msg,
+              content: `❌ Ingestion failed for "${file.name}". ${err.message || "Please make sure the backend is active."}`,
+            }
             : msg
         )
       );
@@ -596,9 +603,9 @@ export default function ChatPage() {
           prev.map((msg) =>
             msg.id === tempId
               ? {
-                  role: "assistant",
-                  content: "Generation stopped.",
-                }
+                role: "assistant",
+                content: "Generation stopped.",
+              }
               : msg
           )
         );
@@ -608,9 +615,9 @@ export default function ChatPage() {
         prev.map((msg) =>
           msg.id === tempId
             ? {
-                role: "assistant",
-                content: "Sorry, I encountered a communication error with the local RAG FastAPI engine. Check if port 8001 is open.",
-              }
+              role: "assistant",
+              content: "Sorry, I encountered a communication error with the local RAG FastAPI engine. Check if port 8001 is open.",
+            }
             : msg
         )
       );
@@ -631,11 +638,31 @@ export default function ChatPage() {
 
   return (
     <main className="flex h-screen w-screen overflow-hidden bg-background text-foreground font-sans antialiased">
+      {/* TOAST NOTIFICATION */}
+      {toast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className={`flex items-center gap-3 px-4 py-3 rounded-2xl shadow-2xl border ${toast.type === "error" ? "bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/50 text-red-700 dark:text-red-400" :
+              toast.type === "success" ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50 text-emerald-700 dark:text-emerald-400" :
+                "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900/50 text-blue-700 dark:text-blue-400"
+            }`}>
+            {toast.type === "error" && <AlertTriangle className="h-5 w-5 flex-shrink-0" />}
+            {toast.type === "success" && <CheckCircle2 className="h-5 w-5 flex-shrink-0" />}
+            {toast.type === "info" && <Info className="h-5 w-5 flex-shrink-0" />}
+            <div className="flex flex-col">
+              <span className="text-sm font-bold">{toast.title}</span>
+              <span className="text-xs opacity-90">{toast.message}</span>
+            </div>
+            <button onClick={() => setToast(null)} className="ml-2 hover:opacity-70 transition-opacity">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 1. LEFT SIDEBAR PANEL (ChatGPT Minimal Theme) */}
       <section
-        className={`flex h-full flex-col border-r border-custom-border bg-sidebar transition-all duration-300 ${
-          sidebarOpen ? "w-80" : "w-0"
-        } overflow-hidden`}
+        className={`flex h-full flex-col border-r border-custom-border bg-sidebar transition-all duration-300 ${sidebarOpen ? "w-80" : "w-0"
+          } overflow-hidden`}
       >
         {/* Sidebar Header */}
         <div className="flex items-center gap-3 border-b border-custom-border px-5 py-4 bg-sidebar">
@@ -676,22 +703,20 @@ export default function ChatPage() {
         <div className="px-4 pb-3 flex gap-2">
           <button
             onClick={() => setActiveTab("chat")}
-            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold border transition-all cursor-pointer ${
-              activeTab === "chat"
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold border transition-all cursor-pointer ${activeTab === "chat"
                 ? "bg-white dark:bg-slate-800 border-custom-border text-foreground shadow-sm"
                 : "bg-transparent border-transparent text-slate-500 hover:bg-slate-200/50 dark:hover:bg-slate-800/40"
-            }`}
+              }`}
           >
             <MessageSquare className="h-3.5 w-3.5" />
             Chats
           </button>
           <button
             onClick={() => setActiveTab("documents")}
-            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold border transition-all cursor-pointer ${
-              activeTab === "documents"
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl py-1.5 text-xs font-semibold border transition-all cursor-pointer ${activeTab === "documents"
                 ? "bg-white dark:bg-slate-800 border-custom-border text-foreground shadow-sm"
                 : "bg-transparent border-transparent text-slate-500 hover:bg-slate-200/50 dark:hover:bg-slate-800/40"
-            }`}
+              }`}
           >
             <BookOpen className="h-3.5 w-3.5" />
             Documents
@@ -714,11 +739,10 @@ export default function ChatPage() {
                     selectSession(s.id);
                     setActiveTab("chat");
                   }}
-                  className={`group flex cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2 transition-all duration-150 ${
-                    isActive && activeTab === "chat"
+                  className={`group flex cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2 transition-all duration-150 ${isActive && activeTab === "chat"
                       ? "bg-slate-200/70 dark:bg-slate-800/70 text-foreground font-medium"
                       : "text-slate-600 dark:text-slate-400 hover:bg-slate-200/40 dark:hover:bg-slate-800/40 hover:text-foreground"
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center gap-2.5 overflow-hidden">
                     <MessageSquare className={`h-4 w-4 flex-shrink-0 ${isActive && activeTab === "chat" ? "text-foreground" : "text-slate-400"}`} />
@@ -762,7 +786,7 @@ export default function ChatPage() {
               </div>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
             <span className="hidden md:flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg font-mono">
               <Terminal className="h-3.5 w-3.5 text-blue-500" />
@@ -814,7 +838,7 @@ export default function ChatPage() {
                       Start a dynamic conversation. Upload your PDFs or text files to instantly segment, generate vector embeddings, and chat in absolute session-isolation.
                     </p>
                   </div>
-                  
+
                   <div className="grid gap-3 grid-cols-2 text-left mt-4">
                     <div className="rounded-xl bg-white dark:bg-slate-900 border border-custom-border p-4 shadow-sm">
                       <div className="flex items-center gap-2 mb-1.5">
@@ -882,7 +906,7 @@ export default function ChatPage() {
                               </div>
                               <ChevronRight className="h-3.5 w-3.5 transform transition-transform group-open:rotate-90 text-slate-400 dark:text-slate-500" />
                             </summary>
-                            <div 
+                            <div
                               id={index === messages.length - 1 ? "active-thought-box" : undefined}
                               className="px-3.5 pb-2.5 pt-1.5 border-t border-slate-200 dark:border-slate-800 font-mono text-[11px] leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto text-slate-600 dark:text-slate-350 scrollbar-thin"
                             >
@@ -904,8 +928,8 @@ export default function ChatPage() {
                             <div className="flex items-center gap-1.5 py-2">
                               {(() => {
                                 const isHydePhase = hydeEnabled && (!msg.sources || msg.sources.length === 0);
-                                const dotColorClass = isHydePhase 
-                                  ? "bg-amber-500 dark:bg-amber-400 shadow-sm shadow-amber-500/20" 
+                                const dotColorClass = isHydePhase
+                                  ? "bg-amber-500 dark:bg-amber-400 shadow-sm shadow-amber-500/20"
                                   : "bg-blue-500 dark:bg-blue-400";
                                 return (
                                   <>
@@ -969,7 +993,7 @@ export default function ChatPage() {
             <footer className="bg-background p-4 border-t border-custom-border/50">
               <form onSubmit={handleSendMessage} className="mx-auto max-w-4xl relative">
                 <div className="relative flex flex-col bg-white dark:bg-[#151515] border border-custom-border rounded-2xl p-3 shadow-md focus-within:border-slate-350 dark:focus-within:border-slate-750 focus-within:shadow-lg transition-all duration-200">
-                  
+
                   {/* Top Row: Full-width spacious Text Area for multiline / long queries */}
                   <div className="w-full">
                     <textarea
@@ -996,7 +1020,7 @@ export default function ChatPage() {
 
                   {/* Bottom Row: Flex row for controls and trigger action */}
                   <div className="flex items-center justify-between gap-3">
-                    
+
                     {/* Left Controls Group */}
                     <div className="flex items-center gap-2 flex-wrap">
                       {/* Paperclip attachment triggers hidden upload input */}
@@ -1023,9 +1047,8 @@ export default function ChatPage() {
                         >
                           <div
                             title={`AI Reasoning Level: ${thinkLevel.toUpperCase()}`}
-                            className={`p-0.5 rounded-lg flex items-center justify-center ${
-                              thinkLevel !== "none" ? "text-blue-500" : "text-slate-400"
-                            }`}
+                            className={`p-0.5 rounded-lg flex items-center justify-center ${thinkLevel !== "none" ? "text-blue-500" : "text-slate-400"
+                              }`}
                           >
                             <Brain className={`h-4 w-4 ${thinkLevel !== "none" && thinkLevel !== "low" ? "animate-pulse" : ""}`} />
                           </div>
@@ -1062,11 +1085,10 @@ export default function ChatPage() {
                                     setThinkLevel(opt.value as any);
                                     setDropdownOpen(false);
                                   }}
-                                  className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${
-                                    thinkLevel === opt.value
+                                  className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${thinkLevel === opt.value
                                       ? "bg-slate-100 dark:bg-slate-800 text-foreground font-semibold"
                                       : "text-slate-650 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100"
-                                  }`}
+                                    }`}
                                 >
                                   <span>{opt.label}</span>
                                   <span className="text-[10px] text-slate-400 font-normal">
@@ -1084,13 +1106,11 @@ export default function ChatPage() {
                         <button
                           type="button"
                           onClick={() => setSearchDepthOpen((prev) => !prev)}
-                          className="flex items-center gap-1.5 border border-custom-border bg-white dark:bg-slate-900 rounded-xl px-2.5 py-1 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer select-none"
+                          className="group relative flex items-center gap-1.5 border border-custom-border bg-white dark:bg-slate-900 rounded-xl px-2.5 py-1 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer select-none"
                         >
                           <div
-                            title={`Search Depth: ${searchDepth.toUpperCase()}`}
-                            className={`p-0.5 rounded-lg flex items-center justify-center ${
-                              searchDepth === "deep" ? "text-green-500 animate-pulse" : searchDepth === "fast" ? "text-amber-500" : "text-blue-500"
-                            }`}
+                            className={`p-0.5 rounded-lg flex items-center justify-center ${searchDepth === "deep" ? "text-green-500 animate-pulse" : searchDepth === "fast" ? "text-amber-500" : "text-blue-500"
+                              }`}
                           >
                             <Database className="h-4 w-4" />
                           </div>
@@ -1098,8 +1118,16 @@ export default function ChatPage() {
                             {searchDepth === "fast" && "⚡ Fast (4)"}
                             {searchDepth === "balanced" && "🔍 Balanced (8)"}
                             {searchDepth === "deep" && "🧠 Deep (12)"}
+                            {searchDepth === "max" && "🔥 Max (24)"}
                             <ChevronDown className={`h-3 w-3 text-slate-400 transition-transform duration-200 ${searchDepthOpen ? "rotate-180" : ""}`} />
                           </span>
+
+                          {/* Premium Hover Tooltip */}
+                          <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-[220px] whitespace-normal text-center p-2 bg-slate-800 dark:bg-black text-white text-[10px] leading-tight font-medium rounded-lg opacity-0 delay-0 group-hover:opacity-100 group-hover:delay-500 transition-opacity pointer-events-none z-50 shadow-xl">
+                            <strong className="block mb-0.5 text-blue-400">RAG Context Depth</strong>
+                            Adjust how many document chunks are retrieved to build the AI's context window.
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800 dark:border-t-black"></div>
+                          </div>
                         </button>
 
                         {searchDepthOpen && (
@@ -1108,14 +1136,15 @@ export default function ChatPage() {
                               className="fixed inset-0 z-40 cursor-default"
                               onClick={() => setSearchDepthOpen(false)}
                             />
-                            <div className="absolute bottom-full mb-2 left-0 z-50 min-w-[220px] overflow-hidden rounded-2xl border border-custom-border bg-white dark:bg-slate-900 p-1.5 shadow-2xl transition-all duration-150 ease-out">
+                            <div className="absolute bottom-full mb-2 left-0 z-50 min-w-[240px] overflow-hidden rounded-2xl border border-custom-border bg-white dark:bg-slate-900 p-1.5 shadow-2xl transition-all duration-150 ease-out">
                               <div className="px-2.5 py-1.5 text-[9px] font-bold tracking-wider text-slate-400 uppercase font-mono border-b border-custom-border mb-1">
                                 RAG Search Context
                               </div>
                               {[
                                 { value: "fast", label: "⚡ Fast Context", desc: "Retrieve top 4 chunks (Maximum speed)" },
                                 { value: "balanced", label: "🔍 Balanced Context", desc: "Retrieve top 8 chunks (Ideal precision)" },
-                                { value: "deep", label: "🧠 Deep Research", desc: "Retrieve top 12 chunks (Maximum context depth)" },
+                                { value: "deep", label: "🧠 Deep Research", desc: "Retrieve top 12 chunks (Deep dive into context)" },
+                                { value: "max", label: "🔥 Max Context", desc: "Retrieve top 24 chunks (Exhaustive context stress test)" },
                               ].map((opt) => (
                                 <button
                                   key={opt.value}
@@ -1124,11 +1153,10 @@ export default function ChatPage() {
                                     setSearchDepth(opt.value as any);
                                     setSearchDepthOpen(false);
                                   }}
-                                  className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${
-                                    searchDepth === opt.value
+                                  className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${searchDepth === opt.value
                                       ? "bg-slate-100 dark:bg-slate-800 text-foreground font-semibold"
                                       : "text-slate-650 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100"
-                                  }`}
+                                    }`}
                                 >
                                   <span>{opt.label}</span>
                                   <span className="text-[10px] text-slate-400 font-normal">
@@ -1146,17 +1174,21 @@ export default function ChatPage() {
                         <button
                           type="button"
                           onClick={() => setPriorityDocsOpen((prev) => !prev)}
-                          className={`flex items-center gap-1.5 border rounded-xl px-2.5 py-1 shadow-sm transition-all cursor-pointer select-none ${
-                            priorityDocs.length > 0
+                          className={`group relative flex items-center gap-1.5 border rounded-xl px-2.5 py-1 shadow-sm transition-all cursor-pointer select-none ${priorityDocs.length > 0
                               ? "border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/40"
                               : "border-custom-border bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
-                          }`}
-                          title="Target specific documents to prioritize their content"
+                            }`}
                         >
                           <Target className={`h-4 w-4 ${priorityDocs.length > 0 ? "text-indigo-500" : "text-slate-400"}`} />
                           <span className="text-[11px] font-semibold font-sans">
                             {priorityDocs.length > 0 ? `🎯 ${priorityDocs.length} Targeted` : "🎯 Target Docs"}
                           </span>
+                          
+                          {/* Premium Hover Tooltip */}
+                          <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-max max-w-[220px] text-center p-2 bg-slate-800 dark:bg-black text-white text-[10px] leading-tight font-medium rounded-lg opacity-0 delay-0 group-hover:opacity-100 group-hover:delay-500 transition-opacity pointer-events-none z-50 shadow-xl">
+                            Target specific documents to aggressively prioritize their content
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800 dark:border-t-black"></div>
+                          </div>
                         </button>
 
                         {/* Dropdown Menu */}
@@ -1198,17 +1230,16 @@ export default function ChatPage() {
                                       key={`${doc.filename}-${idx}`}
                                       type="button"
                                       onClick={() => {
-                                        setPriorityDocs((prev) => 
-                                          isSelected 
+                                        setPriorityDocs((prev) =>
+                                          isSelected
                                             ? prev.filter((d) => d !== uid)
                                             : [...prev, uid]
                                         );
                                       }}
-                                      className={`w-full text-left flex items-center justify-between rounded-xl px-2.5 py-2 text-xs transition-all cursor-pointer ${
-                                        isSelected
+                                      className={`w-full text-left flex items-center justify-between rounded-xl px-2.5 py-2 text-xs transition-all cursor-pointer ${isSelected
                                           ? "bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 font-semibold"
                                           : "text-slate-650 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100"
-                                      }`}
+                                        }`}
                                     >
                                       <div className="flex items-center gap-1.5 truncate pr-2">
                                         <span className="truncate">{doc.filename}</span>
@@ -1237,17 +1268,22 @@ export default function ChatPage() {
                         <button
                           type="button"
                           onClick={() => setHydeEnabled((prev) => !prev)}
-                          className={`flex items-center gap-1.5 border rounded-xl px-2.5 py-1 shadow-sm transition-all cursor-pointer select-none ${
-                            hydeEnabled
+                          className={`group relative flex items-center gap-1.5 border rounded-xl px-2.5 py-1 shadow-sm transition-all cursor-pointer select-none ${hydeEnabled
                               ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 hover:bg-amber-100/70 dark:hover:bg-amber-900/40"
                               : "border-custom-border bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
-                          }`}
-                          title="HyDE Expansion: Generates hypothetical document paragraphs to improve search relevancy for short queries"
+                            }`}
                         >
                           <Brain className={`h-4 w-4 ${hydeEnabled ? "text-amber-500 animate-pulse" : "text-slate-400"}`} />
                           <span className="text-[11px] font-semibold font-sans">
                             {hydeEnabled ? "⚡ HyDE ON" : "⚡ HyDE OFF"}
                           </span>
+
+                          {/* Premium Hover Tooltip */}
+                          <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-[200px] whitespace-normal text-center p-2 bg-slate-800 dark:bg-black text-white text-[10px] leading-tight font-medium rounded-lg opacity-0 delay-0 group-hover:opacity-100 group-hover:delay-500 transition-opacity pointer-events-none z-50 shadow-xl">
+                            <strong className="block mb-0.5 text-amber-400">HyDE AI Expansion</strong>
+                            Generates hypothetical document paragraphs to drastically improve search relevancy for short queries.
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800 dark:border-t-black"></div>
+                          </div>
                         </button>
                       </div>
                     </div>
