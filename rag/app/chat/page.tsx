@@ -207,7 +207,7 @@ export default function ChatPage() {
   async function fetchUploadedDocs() {
     setIsLoadingDocs(true);
     try {
-      const res = await authFetch(`${API_BASE_URL}/api/documents`);
+      const res = await authFetch(`${API_BASE_URL}/api/v1/documents`);
       if (res.ok) {
         const data = await res.json();
         setUploadedDocs(data);
@@ -230,7 +230,7 @@ export default function ChatPage() {
     setIsLoadingDocs(true);
 
     try {
-      const res = await authFetch(`${API_BASE_URL}/api/upload`, {
+      const res = await authFetch(`${API_BASE_URL}/api/v1/documents/upload`, {
         method: "POST",
         body: formData,
       });
@@ -254,7 +254,7 @@ export default function ChatPage() {
   async function handleDeleteDoc(filename: string, sessionId: string | null) {
     if (!confirm(`Are you sure you want to delete "${filename}"?`)) return;
     try {
-      const url = `${API_BASE_URL}/api/documents?filename=${encodeURIComponent(filename)}` + (sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : "");
+      const url = `${API_BASE_URL}/api/v1/documents?filename=${encodeURIComponent(filename)}` + (sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : "");
       const res = await authFetch(url, { method: "DELETE" });
       if (res.ok) {
         fetchUploadedDocs();
@@ -298,7 +298,7 @@ export default function ChatPage() {
   // Fetch all chat history sessions
   async function fetchSessions() {
     try {
-      const res = await authFetch(`${API_BASE_URL}/api/sessions`);
+      const res = await authFetch(`${API_BASE_URL}/api/v1/chat/sessions`);
       if (res.ok) {
         const data = await res.json();
         setSessions(data);
@@ -317,7 +317,7 @@ export default function ChatPage() {
   // Create a fresh conversation session
   async function createNewSession() {
     try {
-      const res = await authFetch(`${API_BASE_URL}/api/sessions`, {
+      const res = await authFetch(`${API_BASE_URL}/api/v1/chat/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: "New Conversation" }),
@@ -337,7 +337,7 @@ export default function ChatPage() {
     setActiveSessionId(id);
     setMessages([]);
     try {
-      const res = await authFetch(`${API_BASE_URL}/api/sessions/${id}/messages`);
+      const res = await authFetch(`${API_BASE_URL}/api/v1/chat/sessions/${id}/messages`);
       if (res.ok) {
         const history = await res.json();
         setMessages(history);
@@ -353,7 +353,7 @@ export default function ChatPage() {
     if (!confirm("Are you sure you want to delete this chat session?")) return;
 
     try {
-      const res = await authFetch(`${API_BASE_URL}/api/sessions/${id}`, {
+      const res = await authFetch(`${API_BASE_URL}/api/v1/chat/sessions/${id}`, {
         method: "DELETE",
       });
       if (res.ok) {
@@ -392,12 +392,12 @@ export default function ChatPage() {
       {
         id: tempSystemId,
         role: "system",
-        content: `Uploading and indexing "${file.name}"... Creating vector chunks in PostgreSQL pgvector.`,
+        content: `Uploading and indexing "${file.name}"... Creating vector chunks in ChromaDB.`,
       },
     ]);
 
     try {
-      const res = await authFetch(`${API_BASE_URL}/api/upload`, {
+      const res = await authFetch(`${API_BASE_URL}/api/v1/documents/upload`, {
         method: "POST",
         body: formData,
       });
@@ -427,7 +427,7 @@ export default function ChatPage() {
             s.id === activeSessionId ? { ...s, title: newTitle } : s
           )
         );
-        authFetch(`${API_BASE_URL}/api/sessions/${activeSessionId}`, {
+        authFetch(`${API_BASE_URL}/api/v1/chat/sessions/${activeSessionId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: newTitle }),
@@ -466,7 +466,7 @@ export default function ChatPage() {
     abortControllerRef.current = controller;
 
     try {
-      const res = await authFetch(`${API_BASE_URL}/api/chat`, {
+      const res = await authFetch(`${API_BASE_URL}/api/v1/chat/sessions/${activeSessionId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -558,7 +558,7 @@ export default function ChatPage() {
             s.id === activeSessionId ? { ...s, title: shortenedTitle } : s
           )
         );
-        authFetch(`${API_BASE_URL}/api/sessions/${activeSessionId}`, {
+        authFetch(`${API_BASE_URL}/api/v1/chat/sessions/${activeSessionId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: shortenedTitle }),

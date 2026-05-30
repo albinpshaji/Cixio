@@ -1,7 +1,7 @@
 from app.schemas import RetrievedChunk
 
 
-def build_rag_prompt(question: str, chunks: list[RetrievedChunk], think_level: str = "medium") -> str:
+def build_rag_prompt(question: str, chunks: list[RetrievedChunk], think_level: str = "medium", chat_history: list[dict[str, str]] = None) -> str:
     # Group chunks by their source document
     grouped_chunks: dict[str, list[tuple[int, RetrievedChunk]]] = {}
     for index, chunk in enumerate(chunks):
@@ -33,6 +33,14 @@ def build_rag_prompt(question: str, chunks: list[RetrievedChunk], think_level: s
 
     context = "\n\n".join(context_parts)
 
+    instructions = [
+        "You are CixioHub. Answer the user's question using the context below.",
+        "If the context does not help, answer from general knowledge.",
+        "Do not falsely attribute details from one document to another.",
+        "When the question requires it, synthesize and combine information across multiple documents.",
+        "Always be concise, specific, and cite the source numbers or document names you used."
+    ]
+
     reasoning_instructions = ""
     if think_level == "low":
         reasoning_instructions = "Reason about the question in one short sentence, then present a fully detailed, comprehensive answer."
@@ -41,25 +49,26 @@ def build_rag_prompt(question: str, chunks: list[RetrievedChunk], think_level: s
     elif think_level == "max":
         reasoning_instructions = "Reason deeply and systematically, analyzing the context from multiple perspectives before answering."
 
-    instructions = [
-        "You are a careful document question-answering assistant.",
-        "Use only the provided context to answer the user's question.",
-        "Do NOT mix, combine, or cross-contaminate information between different documents.",
-        "Keep each document's details strictly isolated and separate.",
-        "If the context does not contain enough information, say that the document context does not provide enough information.",
-        "Be concise, specific, and cite the source numbers you used.",
-    ]
     if reasoning_instructions:
         instructions.append(reasoning_instructions)
 
     instructions_text = "\n".join(instructions)
 
+    history_text = ""
+    if chat_history:
+        history_parts = []
+        for msg in chat_history:
+            role = msg.get("role", "user").capitalize()
+            content = msg.get("content", "")
+            history_parts.append(f"{role}: {content}")
+        if history_parts:
+            history_text = "Conversation History:\n" + "\n\n".join(history_parts) + "\n\n"
+
     return f"""{instructions_text}
 
-Context:
+{history_text}Context:
 {context}
 
-Question:
-{question}
+User Question: {question}
 
 Answer:"""

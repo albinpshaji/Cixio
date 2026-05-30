@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import re
 
 
-CHUNK_SIZE = 1200
+CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 200
 
 

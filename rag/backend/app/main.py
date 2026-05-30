@@ -15,7 +15,7 @@ from app.chunking import chunk_text
 from app.config import settings
 from app.db import close_pool, open_pool, pool
 from app.ollama import create_embedding, generate_answer
-from app.pdf import extract_pdf_chunks
+from app.document_processor import extract_document_chunks
 from app.prompts import build_rag_prompt
 from app.retrieval import retrieve_relevant_chunks
 from app.schemas import (
@@ -31,7 +31,7 @@ from app.schemas import (
     RetrievedChunk,
     DocumentItem,
 )
-from app.vector import to_pg_vector
+
 
 
 @dataclass(frozen=True)
@@ -114,33 +114,70 @@ def clean_source(source: str | None, fallback: str = "pasted text") -> str:
 
 
 def store_chunks(chunks: list[ChunkToStore], user_id: str | None = None) -> None:
+    import uuid
+    from app.chroma_db import get_chroma_collection
+
     ingested_at = datetime.now(timezone.utc).isoformat()
-    embedded_chunks: list[tuple[str, Jsonb, str, str | None]] = []
+    embedded_chunks: list[tuple[str, Jsonb, str | None]] = []
+
+    embeddings = []
+    documents = []
+    metadatas = []
+    ids = []
 
     for chunk in chunks:
         embedding = create_embedding(chunk.content)
+        meta = {**chunk.metadata, "ingestedAt": ingested_at}
+        if user_id:
+            meta["user_id"] = str(user_id)
+
+        # Sanitize metadata for ChromaDB (no None values allowed)
+        chroma_meta = {}
+        for k, v in meta.items():
+            if v is not None:
+                if isinstance(v, (str, int, float, bool)):
+                    chroma_meta[k] = v
+                else:
+                    chroma_meta[k] = str(v)
+
+        # ChromaDB data
+        embeddings.append(embedding)
+        documents.append(chunk.content)
+        metadatas.append(chroma_meta)
+        ids.append(str(uuid.uuid4()))
+
+        # SQL data (no embedding)
         embedded_chunks.append(
             (
                 chunk.content,
-                Jsonb({**chunk.metadata, "ingestedAt": ingested_at}),
-                to_pg_vector(embedding),
+                Jsonb(meta),
                 user_id,
             )
         )
 
+    # Insert into ChromaDB
+    collection = get_chroma_collection()
+    collection.add(
+        embeddings=embeddings,
+        documents=documents,
+        metadatas=metadatas,
+        ids=ids
+    )
+
+    # Insert into PostgreSQL for tracking and history
     with pool.connection() as connection:
         with connection.transaction():
             with connection.cursor() as cursor:
                 cursor.executemany(
                     """
-                    INSERT INTO documents (content, metadata, embedding, user_id)
-                    VALUES (%s, %s::jsonb, %s::vector, %s::uuid)
+                    INSERT INTO documents (content, metadata, user_id)
+                    VALUES (%s, %s::jsonb, %s::uuid)
                     """,
                     embedded_chunks,
                 )
 
 
-@app.post("/api/ingest", response_model=IngestResponse)
+@app.post("/api/v1/documents/ingest", response_model=IngestResponse)
 def ingest_document(
     request: IngestRequest,
     current_user: dict = Depends(get_current_user)
@@ -176,13 +213,13 @@ def ingest_document(
     return IngestResponse(source=source, chunks=len(chunks))
 
 
-@app.post("/api/upload", response_model=UploadResponse)
+@app.post("/api/v1/documents/upload", response_model=UploadResponse)
 def upload_pdf(
     file: UploadFile = File(...),
     sessionId: str | None = Form(None),
     current_user: dict = Depends(get_current_user)
 ) -> UploadResponse:
-    source, pages, pdf_chunks = extract_pdf_chunks(file)
+    source, pages, pdf_chunks = extract_document_chunks(file)
     chunks_to_store = [
         ChunkToStore(
             content=chunk.content,
@@ -205,14 +242,15 @@ def upload_pdf(
     return UploadResponse(source=source, chunks=len(pdf_chunks), pages=pages)
 
 
-@app.post("/api/chat")
+@app.post("/api/v1/chat/sessions/{session_id}/messages")
 async def chat(
+    session_id: str,
     request: ChatRequest,
     raw_request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     question = request.question.strip()
-    sessionId = request.sessionId
+    sessionId = session_id
     user_id = current_user["id"]
 
     if not question:
@@ -289,7 +327,26 @@ async def chat(
                     print(db_err)
             return
 
-        prompt = build_rag_prompt(question, sources, think_level=request.think_level)
+        chat_history = []
+        if sessionId:
+            try:
+                with pool.connection() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT role, content FROM chat_messages WHERE session_id = %s ORDER BY created_at DESC LIMIT 10",
+                            (sessionId,),
+                        )
+                        rows = cursor.fetchall()
+                        # Reverse to chronological order, exclude the current question
+                        for row in reversed(rows):
+                            # Ensure we don't duplicate the current question if it was just inserted
+                            if row[0] == "user" and row[1] == question and len(chat_history) == 0:
+                                continue
+                            chat_history.append({"role": row[0], "content": row[1]})
+            except Exception as e:
+                print(f"[History Error] {e}")
+
+        prompt = build_rag_prompt(question, sources, think_level=request.think_level, chat_history=chat_history)
         full_response = ""
         full_thinking = ""
         
@@ -359,7 +416,7 @@ async def chat(
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
 
-@app.get("/api/sessions", response_model=list[SessionResponse])
+@app.get("/api/v1/chat/sessions", response_model=list[SessionResponse])
 def list_sessions(current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:
@@ -371,7 +428,7 @@ def list_sessions(current_user: dict = Depends(get_current_user)):
             return [SessionResponse(id=str(row[0]), title=row[1], created_at=row[2]) for row in rows]
 
 
-@app.post("/api/sessions", response_model=SessionResponse, status_code=201)
+@app.post("/api/v1/chat/sessions", response_model=SessionResponse, status_code=201)
 def create_session(request: SessionCreate, current_user: dict = Depends(get_current_user)):
     title = request.title.strip() if request.title else "New Chat"
     with pool.connection() as connection:
@@ -385,7 +442,7 @@ def create_session(request: SessionCreate, current_user: dict = Depends(get_curr
             return SessionResponse(id=str(row[0]), title=row[1], created_at=row[2])
 
 
-@app.put("/api/sessions/{session_id}", response_model=SessionResponse)
+@app.put("/api/v1/chat/sessions/{session_id}", response_model=SessionResponse)
 def update_session(session_id: str, request: SessionUpdate, current_user: dict = Depends(get_current_user)):
     title = request.title.strip()
     if not title:
@@ -411,7 +468,7 @@ def update_session(session_id: str, request: SessionUpdate, current_user: dict =
             return SessionResponse(id=str(row[0]), title=row[1], created_at=row[2])
 
 
-@app.delete("/api/sessions/{session_id}")
+@app.delete("/api/v1/chat/sessions/{session_id}")
 def delete_session(session_id: str, current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:
@@ -428,7 +485,7 @@ def delete_session(session_id: str, current_user: dict = Depends(get_current_use
     return {"status": "success", "message": "Session deleted"}
 
 
-@app.get("/api/sessions/{session_id}/messages", response_model=list[MessageResponse])
+@app.get("/api/v1/chat/sessions/{session_id}/messages", response_model=list[MessageResponse])
 def list_messages(session_id: str, current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:
@@ -468,7 +525,7 @@ def list_messages(session_id: str, current_user: dict = Depends(get_current_user
             ]
 
 
-@app.get("/api/documents", response_model=list[DocumentItem])
+@app.get("/api/v1/documents", response_model=list[DocumentItem])
 def list_documents(current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:
@@ -498,7 +555,7 @@ def list_documents(current_user: dict = Depends(get_current_user)):
             ]
 
 
-@app.delete("/api/documents")
+@app.delete("/api/v1/documents")
 def delete_document(filename: str, sessionId: str | None = None, current_user: dict = Depends(get_current_user)):
     with pool.connection() as connection:
         with connection.cursor() as cursor:

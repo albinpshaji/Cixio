@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Local Document RAG Engine",
-  description: "A local Retrieval-Augmented Generation engine built with Next.js, Ollama, and pgvector.",
+  description: "A local Retrieval-Augmented Generation engine built with Next.js, Ollama, and ChromaDB.",
 };
 
 export default function RootLayout({

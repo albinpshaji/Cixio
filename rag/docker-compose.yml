@@ -3,7 +3,7 @@ services:
     build:
       context: ./db
       dockerfile: Dockerfile
-    image: rag-postgres-pgvector:latest
+    image: postgres:16
     container_name: rag-postgres
     restart: unless-stopped
     network_mode: host

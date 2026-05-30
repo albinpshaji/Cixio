@@ -1,106 +1,82 @@
 from typing import Any
-
 from app.config import settings
-from app.db import pool
 from app.ollama import create_embedding
 from app.schemas import RetrievedChunk
-from app.vector import to_pg_vector
-
+from app.chroma_db import get_chroma_collection
 
 def retrieve_relevant_chunks(question: str, sessionId: str | None = None, limit: int | None = None, user_id: str | None = None) -> list[RetrievedChunk]:
     embedding = create_embedding(question)
-    vector = to_pg_vector(embedding)
-    
     query_limit = limit if limit is not None else settings.retrieval_limit
 
-    with pool.connection() as connection:
-        with connection.cursor() as cursor:
-            if sessionId:
-                # If user_id is provided, filter base_chunks by it
-                user_filter = "AND user_id = %s::uuid" if user_id else ""
-                params = [vector, sessionId]
-                if user_id:
-                    params.append(user_id)
-                params.extend([sessionId, question, question, query_limit])
+    collection = get_chroma_collection()
 
-                cursor.execute(
-                    f"""
-                    WITH base_chunks AS (
-                        SELECT
-                            id,
-                            content,
-                            metadata,
-                            (1 - (embedding <=> %s::vector)) AS base_similarity
-                        FROM documents
-                        WHERE embedding IS NOT NULL 
-                          AND (metadata->>'sessionId' = %s OR metadata->>'sessionId' IS NULL OR metadata->>'sessionId' = 'null')
-                          {user_filter}
-                    )
-                    SELECT
-                        id,
-                        content,
-                        metadata,
-                        (CASE 
-                            WHEN metadata->>'sessionId' = %s THEN base_similarity + 0.03
-                            ELSE base_similarity
-                        END) + (CASE 
-                            WHEN metadata->>'source' IS NOT NULL AND (
-                                LOWER(%s) LIKE '%%' || LOWER(REPLACE(REPLACE(metadata->>'source', '.pdf', ''), '.txt', '')) || '%%'
-                                OR LOWER(metadata->>'source') LIKE '%%' || LOWER(%s) || '%%'
-                            ) THEN 0.12
-                            ELSE 0.0
-                        END) AS similarity
-                    FROM base_chunks
-                    ORDER BY similarity DESC
-                    LIMIT %s
-                    """,
-                    tuple(params),
-                )
-            else:
-                user_filter = "AND user_id = %s::uuid" if user_id else ""
-                params = [vector]
-                if user_id:
-                    params.append(user_id)
-                params.extend([question, question, query_limit])
+    where_filter = {}
+    if user_id:
+        where_filter["user_id"] = str(user_id)
 
-                cursor.execute(
-                    f"""
-                    WITH base_chunks AS (
-                        SELECT
-                            id,
-                            content,
-                            metadata,
-                            (1 - (embedding <=> %s::vector)) AS base_similarity
-                        FROM documents
-                        WHERE embedding IS NOT NULL 
-                          AND (metadata->>'sessionId' IS NULL OR metadata->>'sessionId' = 'null')
-                          {user_filter}
-                    )
-                    SELECT
-                        id,
-                        content,
-                        metadata,
-                        base_similarity + (CASE 
-                            WHEN metadata->>'source' IS NOT NULL AND (
-                                LOWER(%s) LIKE '%%' || LOWER(REPLACE(REPLACE(metadata->>'source', '.pdf', ''), '.txt', '')) || '%%'
-                                OR LOWER(metadata->>'source') LIKE '%%' || LOWER(%s) || '%%'
-                            ) THEN 0.12
-                            ELSE 0.0
-                        END) AS similarity
-                    FROM base_chunks
-                    ORDER BY similarity DESC
-                    LIMIT %s
-                    """,
-                    tuple(params),
-                )
-            rows: list[tuple[int, str, dict[str, Any] | None, float]] = cursor.fetchall()
-
-    return [
-        RetrievedChunk(
-            id=row[0],
-            content=row[1],
-            metadata=row[2],
-            similarity=float(row[3]),
+    # Query ChromaDB for top 50 matches for the user
+    # We fetch more than the limit so we can apply python-side boosting and sorting
+    try:
+        results = collection.query(
+            query_embeddings=[embedding],
+            n_results=50,
+            where=where_filter,
+            include=["documents", "metadatas", "distances"]
         )
-        for row in rows
-    ]
+    except Exception as e:
+        print(f"ChromaDB Query Error: {e}")
+        return []
+
+    if not results or not results["ids"] or not results["ids"][0]:
+        return []
+
+    chunks = []
+    for i in range(len(results["ids"][0])):
+        chunk_id = results["ids"][0][i]
+        content = results["documents"][0][i]
+        metadata = results["metadatas"][0][i]
+        distance = results["distances"][0][i]
+
+        # ChromaDB with cosine space returns distance = 1 - cosine_similarity
+        # So base_similarity = 1 - distance
+        base_similarity = 1.0 - distance
+
+        chunk_session_id = metadata.get("sessionId")
+
+        # Skip chunks explicitly belonging to OTHER sessions
+        if chunk_session_id and chunk_session_id != "null" and chunk_session_id != sessionId:
+            continue
+
+        similarity = base_similarity
+
+        # Session Isolation Boost (+0.03)
+        if chunk_session_id == sessionId:
+            similarity += 0.03
+
+        # Source/Filename Match Boost (+0.12)
+        source = metadata.get("source", "")
+        if source:
+            source_lower = source.lower()
+            q_lower = question.lower()
+            clean_source = source_lower.replace(".pdf", "").replace(".txt", "").replace(".docx", "")
+
+            if clean_source in q_lower or source_lower in q_lower:
+                similarity += 0.12
+
+        # Convert chunk_id (UUID string) to int if needed by schema, but we can pass hash or change schema.
+        # We will use hash(chunk_id) mod 1e9 to fit into an integer.
+        int_id = abs(hash(chunk_id)) % 1000000000
+
+        chunks.append(
+            RetrievedChunk(
+                id=int_id,
+                content=content,
+                metadata=metadata,
+                similarity=similarity,
+            )
+        )
+
+    # Sort chunks by boosted similarity
+    chunks.sort(key=lambda x: x.similarity, reverse=True)
+
+    return chunks[:query_limit]

@@ -1,15 +1,8 @@
-CREATE EXTENSION IF NOT EXISTS vector;
-
 CREATE TABLE IF NOT EXISTS documents (
     id SERIAL PRIMARY KEY,
     content TEXT NOT NULL,
-    metadata JSONB,
-    embedding VECTOR(768)
+    metadata JSONB
 );
-
-CREATE INDEX IF NOT EXISTS documents_embedding_hnsw_idx
-ON documents
-USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -81,8 +81,8 @@ export default function DashboardPage() {
       // Fetch stats
       try {
         const [sessRes, docsRes] = await Promise.all([
-          authFetch(`${API_BASE_URL}/api/sessions`),
-          authFetch(`${API_BASE_URL}/api/documents`),
+          authFetch(`${API_BASE_URL}/api/v1/chat/sessions`),
+          authFetch(`${API_BASE_URL}/api/v1/documents`),
         ]);
         if (sessRes.ok) setSessions(await sessRes.json());
         if (docsRes.ok) setDocuments(await docsRes.json());

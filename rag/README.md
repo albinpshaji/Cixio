@@ -1,7 +1,7 @@
 # Local RAG Engine
 
-Local document question answering for pasted text and PDFs with a Next.js frontend,
-Python/FastAPI backend, PostgreSQL + pgvector, and Ollama.
+Local document question answering for pasted text, PDFs, DOCX, TXT, and Images with a Next.js frontend,
+Python/FastAPI backend, PostgreSQL, ChromaDB, and Ollama.
 
 ## Architecture
 
@@ -9,7 +9,7 @@ Python/FastAPI backend, PostgreSQL + pgvector, and Ollama.
 Browser
   -> Next.js React frontend
   -> Python FastAPI backend
-  -> Ollama + PostgreSQL/pgvector
+  -> Ollama + PostgreSQL & ChromaDB
 ```
 
 The frontend lives in `app/page.tsx`. The Python backend lives in `backend/app`.
@@ -66,7 +66,7 @@ The backend defaults match the local Docker and Ollama setup. Copy
 
 ## Features
 
-- Paste plain text and ingest it into pgvector.
-- Upload PDFs and store page-aware chunks.
+- Paste plain text and ingest it into ChromaDB.
+- Upload PDFs, DOCX, TXT, and Images to store page-aware chunks.
 - Ask grounded questions against stored chunks.
 - Inspect retrieved source chunks and PDF page metadata.

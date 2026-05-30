@@ -39,7 +39,7 @@ export async function registerUser(
   fullName: string,
   password: string
 ): Promise<{ access_token: string; refresh_token: string }> {
-  const res = await fetch(`${API_BASE_URL}/api/auth/register`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, full_name: fullName, password }),
@@ -57,7 +57,7 @@ export async function loginUser(
   email: string,
   password: string
 ): Promise<{ access_token: string; refresh_token: string }> {
-  const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -76,7 +76,7 @@ export async function refreshTokens(): Promise<boolean> {
   if (!refreshToken) return false;
 
   try {
-    const res = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+    const res = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -101,7 +101,7 @@ export async function getCurrentUser(): Promise<User | null> {
   if (!token) return null;
 
   try {
-    let res = await fetch(`${API_BASE_URL}/api/auth/me`, {
+    let res = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
@@ -111,7 +111,7 @@ export async function getCurrentUser(): Promise<User | null> {
       if (!refreshed) return null;
 
       const newToken = getAccessToken();
-      res = await fetch(`${API_BASE_URL}/api/auth/me`, {
+      res = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
         headers: { Authorization: `Bearer ${newToken}` },
       });
     }
@@ -133,7 +133,7 @@ export async function logoutUser(): Promise<void> {
 
   if (token && refreshToken) {
     try {
-      await fetch(`${API_BASE_URL}/api/auth/logout`, {
+      await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
