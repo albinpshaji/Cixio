@@ -40,6 +40,7 @@ class ChatRequest(BaseModel):
     think: bool = True
     think_level: str = "medium"
     search_depth: str = "balanced"
+    hyde: bool = False
 
 
 class RetrievedChunk(BaseModel):

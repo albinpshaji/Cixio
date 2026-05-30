@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "smarthub-dev-secret-change-in-production-2026"
     jwt_access_expiry_minutes: int = 30
     jwt_refresh_expiry_days: int = 7
+    hyde_max_tokens: int = 35
+    hyde_temperature: float = 0.1
 
     model_config = SettingsConfigDict(
         env_file=".env",

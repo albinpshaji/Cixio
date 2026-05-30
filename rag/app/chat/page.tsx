@@ -83,6 +83,7 @@ type Source = {
     source?: string;
     page?: number;
     chunkIndex?: number;
+    hyde_query?: string;
   } | null;
   similarity: number;
 };
@@ -94,6 +95,10 @@ type Message = {
   thoughts?: string;
   sources?: Source[];
   tokenUsage?: {
+    prompt_tokens: number;
+    eval_tokens: number;
+  };
+  token_usage?: {
     prompt_tokens: number;
     eval_tokens: number;
   };
@@ -123,6 +128,7 @@ export default function ChatPage() {
   const [searchDepthOpen, setSearchDepthOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [activeTab, setActiveTab] = useState<"chat" | "documents">("chat");
+  const [hydeEnabled, setHydeEnabled] = useState(false);
 
   // Read active tab query param on mount
   useEffect(() => {
@@ -459,8 +465,13 @@ export default function ChatPage() {
     setQuestion("");
     setIsAsking(true);
 
-    // Append user message
-    setMessages((prev) => [...prev, { role: "user", content: currentQuestion }]);
+    // Append user message and instant assistant loading state
+    const tempId = `asst-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: currentQuestion },
+      { id: tempId, role: "assistant", content: "", thoughts: "", sources: [] },
+    ]);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -475,6 +486,7 @@ export default function ChatPage() {
           think: thinkLevel !== "none",
           think_level: thinkLevel,
           search_depth: searchDepth,
+          hyde: hydeEnabled,
         }),
         signal: controller.signal,
       });
@@ -489,12 +501,7 @@ export default function ChatPage() {
       let assistantThoughts = "";
       let retrievedSources: Source[] = [];
 
-      // Append blank assistant response
-      const tempId = `asst-${Date.now()}`;
-      setMessages((prev) => [
-        ...prev,
-        { id: tempId, role: "assistant", content: "", thoughts: "", sources: [] },
-      ]);
+      // Assistant placeholder is already appended instantly at the top of handleSendMessage
 
       let buffer = "";
       let currentEvent = "";
@@ -566,15 +573,28 @@ export default function ChatPage() {
       }
     } catch (err: any) {
       if (err.name === "AbortError") {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId
+              ? {
+                  role: "assistant",
+                  content: "Generation stopped.",
+                }
+              : msg
+          )
+        );
         return;
       }
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "Sorry, I encountered a communication error with the local RAG FastAPI engine. Check if port 8001 is open.",
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === tempId
+            ? {
+                role: "assistant",
+                content: "Sorry, I encountered a communication error with the local RAG FastAPI engine. Check if port 8001 is open.",
+              }
+            : msg
+        )
+      );
     } finally {
       setIsAsking(false);
       abortControllerRef.current = null;
@@ -860,9 +880,19 @@ export default function ChatPage() {
                             <p className="whitespace-pre-line">{msg.content}</p>
                           ) : msg.content === "" && (!msg.thoughts || msg.thoughts === "") ? (
                             <div className="flex items-center gap-1.5 py-2">
-                              <span className="h-2 w-2 rounded-full bg-blue-500 dark:bg-blue-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-                              <span className="h-2 w-2 rounded-full bg-blue-500 dark:bg-blue-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-                              <span className="h-2 w-2 rounded-full bg-blue-500 dark:bg-blue-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                              {(() => {
+                                const isHydePhase = hydeEnabled && (!msg.sources || msg.sources.length === 0);
+                                const dotColorClass = isHydePhase 
+                                  ? "bg-amber-500 dark:bg-amber-400 shadow-sm shadow-amber-500/20" 
+                                  : "bg-blue-500 dark:bg-blue-400";
+                                return (
+                                  <>
+                                    <span className={`h-2 w-2 rounded-full ${dotColorClass} animate-bounce transition-colors duration-1000 ease-in-out`} style={{ animationDelay: "0ms" }} />
+                                    <span className={`h-2 w-2 rounded-full ${dotColorClass} animate-bounce transition-colors duration-1000 ease-in-out`} style={{ animationDelay: "150ms" }} />
+                                    <span className={`h-2 w-2 rounded-full ${dotColorClass} animate-bounce transition-colors duration-1000 ease-in-out`} style={{ animationDelay: "300ms" }} />
+                                  </>
+                                );
+                              })()}
                             </div>
                           ) : (
                             renderMarkdown(msg.content)
@@ -881,14 +911,22 @@ export default function ChatPage() {
                         )}
 
                         {/* Token Usage references */}
-                        {!isUser && msg.tokenUsage && (
+                        {!isUser && (msg.tokenUsage || msg.token_usage) && (
                           <div className="flex flex-wrap items-center gap-1.5 mt-1.5 pl-1.5 text-[10px] text-slate-400 dark:text-slate-500 font-mono select-none">
-                            <span className="flex items-center gap-1">
-                              <Cpu className="h-2.5 w-2.5 text-slate-400 dark:text-slate-500" />
-                              Context: {msg.tokenUsage.prompt_tokens.toLocaleString()} / 8,192 tokens ({Math.min(100, Math.round((msg.tokenUsage.prompt_tokens / 8192) * 100))}% used)
-                            </span>
-                            <span>·</span>
-                            <span>Response: {msg.tokenUsage.eval_tokens.toLocaleString()} tokens</span>
+                            {(() => {
+                              const usage = msg.tokenUsage || msg.token_usage;
+                              if (!usage) return null;
+                              return (
+                                <>
+                                  <span className="flex items-center gap-1">
+                                    <Cpu className="h-2.5 w-2.5 text-slate-400 dark:text-slate-500" />
+                                    Context: {usage.prompt_tokens?.toLocaleString() || "0"} / 8,192 tokens ({Math.min(100, Math.round((usage.prompt_tokens / 8192) * 100))}% used)
+                                  </span>
+                                  <span>·</span>
+                                  <span>Response: {usage.eval_tokens?.toLocaleString() || "0"} tokens</span>
+                                </>
+                              );
+                            })()}
                           </div>
                         )}
                       </div>
@@ -906,150 +944,224 @@ export default function ChatPage() {
             </div>
 
             {/* Input Bar Section */}
-            <footer className="bg-background px-6 py-4">
+            <footer className="bg-background p-4 border-t border-custom-border/50">
               <form onSubmit={handleSendMessage} className="mx-auto max-w-4xl relative">
-                <div className="relative flex items-center bg-slate-100 dark:bg-slate-800 border border-custom-border rounded-3xl px-4 py-2.5 focus-within:border-slate-300 dark:focus-within:border-slate-700 transition-all shadow-sm">
-                  {/* Paperclip attachment triggers hidden upload input */}
-                  <button
-                    type="button"
-                    disabled={isUploading}
-                    onClick={() => fileInputRef.current?.click()}
-                    className="p-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-700/50 disabled:opacity-50 cursor-pointer"
-                  >
-                    {isUploading ? (
-                      <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
-                    ) : (
-                      <Paperclip className="h-5 w-5 hover:rotate-12 transition-transform" />
-                    )}
-                  </button>
-
-                  {/* Glowing Brain Reasoning Level Selector */}
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setDropdownOpen((prev) => !prev)}
-                      className="flex items-center gap-1.5 border border-custom-border bg-white dark:bg-slate-900 rounded-xl px-2.5 py-1 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer select-none"
-                    >
-                      <div
-                        title={`AI Reasoning Level: ${thinkLevel.toUpperCase()}`}
-                        className={`p-0.5 rounded-lg flex items-center justify-center ${
-                          thinkLevel !== "none" ? "text-blue-500" : "text-slate-400"
-                        }`}
-                      >
-                        <Brain className={`h-4.5 w-4.5 ${thinkLevel !== "none" && thinkLevel !== "low" ? "animate-pulse" : ""}`} />
-                      </div>
-                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-350 font-sans flex items-center gap-1">
-                        {thinkLevel === "none" && "⚡ Fast"}
-                        {thinkLevel === "low" && "🧠 Low"}
-                        {thinkLevel === "medium" && "🧠🧠 Medium"}
-                        {thinkLevel === "max" && "🧠🧠🧠 Max"}
-                        <ChevronDown className={`h-3 w-3 text-slate-400 transition-transform duration-200 ${dropdownOpen ? "rotate-180" : ""}`} />
-                      </span>
-                    </button>
-
-                    {/* Premium Custom Dropdown Menu */}
-                    {dropdownOpen && (
-                      <>
-                        <div
-                          className="fixed inset-0 z-40 cursor-default"
-                          onClick={() => setDropdownOpen(false)}
-                        />
-                        <div className="absolute bottom-full mb-2 left-0 z-50 min-w-[200px] overflow-hidden rounded-2xl border border-custom-border bg-white dark:bg-slate-900 p-1.5 shadow-2xl transition-all duration-155 ease-out">
-                          <div className="px-2.5 py-1.5 text-[9px] font-bold tracking-wider text-slate-400 uppercase font-mono border-b border-custom-border mb-1">
-                            AI Reasoning Depth
-                          </div>
-                          {[
-                            { value: "none", label: "⚡ Fast", desc: "Instant response, no thinking" },
-                            { value: "low", label: "🧠 Low", desc: "1-sentence quiet reasoning" },
-                            { value: "medium", label: "🧠🧠 Medium", desc: "Short, structured logic" },
-                            { value: "max", label: "🧠🧠🧠 Max", desc: "Exhaustive deep thinking" },
-                          ].map((opt) => (
-                            <button
-                              key={opt.value}
-                              type="button"
-                              onClick={() => {
-                                setThinkLevel(opt.value as any);
-                                setDropdownOpen(false);
-                              }}
-                              className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${
-                                thinkLevel === opt.value
-                                  ? "bg-slate-100 dark:bg-slate-800 text-foreground font-semibold"
-                                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-850 hover:text-slate-900 dark:hover:text-slate-100"
-                              }`}
-                            >
-                              <span>{opt.label}</span>
-                              <span className="text-[10px] text-slate-400 font-normal">
-                                {opt.desc}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      </>
-                    )}
+                <div className="relative flex flex-col bg-white dark:bg-[#151515] border border-custom-border rounded-2xl p-3 shadow-md focus-within:border-slate-350 dark:focus-within:border-slate-750 focus-within:shadow-lg transition-all duration-200">
+                  
+                  {/* Top Row: Full-width spacious Text Area for multiline / long queries */}
+                  <div className="w-full">
+                    <textarea
+                      value={question}
+                      disabled={isAsking}
+                      onChange={(e) => setQuestion(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          const form = e.currentTarget.form;
+                          if (form) {
+                            form.requestSubmit();
+                          }
+                        }
+                      }}
+                      rows={2}
+                      placeholder="Ask a question grounded in your session's index..."
+                      className="w-full bg-transparent px-2 py-1.5 text-sm text-foreground outline-none placeholder-slate-400 dark:placeholder-slate-500 disabled:opacity-50 font-sans resize-none min-h-[50px] max-h-[160px] scrollbar-thin"
+                    />
                   </div>
 
-                  {/* Premium RAG Search Depth Selector */}
-                  {/* Premium RAG Search Depth Selector */}
-                  <div className="relative ml-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setSearchDepthOpen((prev) => !prev)}
-                      className="flex items-center gap-1.5 border border-custom-border bg-white dark:bg-slate-900 rounded-xl px-2.5 py-1 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer select-none"
-                    >
-                      <div
-                        title={`Search Depth: ${searchDepth.toUpperCase()}`}
-                        className={`p-0.5 rounded-lg flex items-center justify-center ${
-                          searchDepth === "deep" ? "text-green-500 animate-pulse" : searchDepth === "fast" ? "text-amber-500" : "text-blue-500"
-                        }`}
-                      >
-                        <Database className="h-4 w-4" />
-                      </div>
-                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-350 font-sans flex items-center gap-1">
-                        {searchDepth === "fast" && "⚡ Fast (4)"}
-                        {searchDepth === "balanced" && "🔍 Balanced (8)"}
-                        {searchDepth === "deep" && "🧠 Deep (12)"}
-                        <ChevronDown className={`h-3 w-3 text-slate-400 transition-transform duration-200 ${searchDepthOpen ? "rotate-180" : ""}`} />
-                      </span>
-                    </button>
+                  {/* Divider */}
+                  <div className="border-t border-slate-100 dark:border-slate-800/40 my-2" />
 
-                    {searchDepthOpen && (
-                      <>
-                        <div
-                          className="fixed inset-0 z-40 cursor-default"
-                          onClick={() => setSearchDepthOpen(false)}
-                        />
-                        <div className="absolute bottom-full mb-2 left-0 z-50 min-w-[220px] overflow-hidden rounded-2xl border border-custom-border bg-white dark:bg-slate-900 p-1.5 shadow-2xl transition-all duration-155 ease-out">
-                          <div className="px-2.5 py-1.5 text-[9px] font-bold tracking-wider text-slate-400 uppercase font-mono border-b border-custom-border mb-1">
-                            RAG Search Context
+                  {/* Bottom Row: Flex row for controls and trigger action */}
+                  <div className="flex items-center justify-between gap-3">
+                    
+                    {/* Left Controls Group */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {/* Paperclip attachment triggers hidden upload input */}
+                      <button
+                        type="button"
+                        disabled={isUploading}
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer transition-colors"
+                        title="Upload Document"
+                      >
+                        {isUploading ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                        ) : (
+                          <Paperclip className="h-4 w-4 hover:rotate-12 transition-transform" />
+                        )}
+                      </button>
+
+                      {/* Glowing Brain Reasoning Level Selector */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setDropdownOpen((prev) => !prev)}
+                          className="flex items-center gap-1.5 border border-custom-border bg-white dark:bg-slate-900 rounded-xl px-2.5 py-1 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer select-none"
+                        >
+                          <div
+                            title={`AI Reasoning Level: ${thinkLevel.toUpperCase()}`}
+                            className={`p-0.5 rounded-lg flex items-center justify-center ${
+                              thinkLevel !== "none" ? "text-blue-500" : "text-slate-400"
+                            }`}
+                          >
+                            <Brain className={`h-4 w-4 ${thinkLevel !== "none" && thinkLevel !== "low" ? "animate-pulse" : ""}`} />
                           </div>
-                          {[
-                            { value: "fast", label: "⚡ Fast Context", desc: "Retrieve top 4 chunks (Maximum speed)" },
-                            { value: "balanced", label: "🔍 Balanced Context", desc: "Retrieve top 8 chunks (Ideal precision)" },
-                            { value: "deep", label: "🧠 Deep Research", desc: "Retrieve top 12 chunks (Maximum context depth)" },
-                          ].map((opt) => (
-                            <button
-                              key={opt.value}
-                              type="button"
-                              onClick={() => {
-                                setSearchDepth(opt.value as any);
-                                setSearchDepthOpen(false);
-                              }}
-                              className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${
-                                searchDepth === opt.value
-                                  ? "bg-slate-100 dark:bg-slate-800 text-foreground font-semibold"
-                                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-850 hover:text-slate-900 dark:hover:text-slate-100"
-                              }`}
-                            >
-                              <span>{opt.label}</span>
-                              <span className="text-[10px] text-slate-400 font-normal">
-                                {opt.desc}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      </>
-                    )}
+                          <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-350 font-sans flex items-center gap-1">
+                            {thinkLevel === "none" && "⚡ Fast"}
+                            {thinkLevel === "low" && "🧠 Low"}
+                            {thinkLevel === "medium" && "🧠🧠 Medium"}
+                            {thinkLevel === "max" && "🧠🧠🧠 Max"}
+                            <ChevronDown className={`h-3 w-3 text-slate-400 transition-transform duration-200 ${dropdownOpen ? "rotate-180" : ""}`} />
+                          </span>
+                        </button>
+
+                        {/* Premium Custom Dropdown Menu */}
+                        {dropdownOpen && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-40 cursor-default"
+                              onClick={() => setDropdownOpen(false)}
+                            />
+                            <div className="absolute bottom-full mb-2 left-0 z-50 min-w-[200px] overflow-hidden rounded-2xl border border-custom-border bg-white dark:bg-slate-900 p-1.5 shadow-2xl transition-all duration-150 ease-out">
+                              <div className="px-2.5 py-1.5 text-[9px] font-bold tracking-wider text-slate-400 uppercase font-mono border-b border-custom-border mb-1">
+                                AI Reasoning Depth
+                              </div>
+                              {[
+                                { value: "none", label: "⚡ Fast", desc: "Instant response, no thinking" },
+                                { value: "low", label: "🧠 Low", desc: "1-sentence quiet reasoning" },
+                                { value: "medium", label: "🧠🧠 Medium", desc: "Short, structured logic" },
+                                { value: "max", label: "🧠🧠🧠 Max", desc: "Exhaustive deep thinking" },
+                              ].map((opt) => (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => {
+                                    setThinkLevel(opt.value as any);
+                                    setDropdownOpen(false);
+                                  }}
+                                  className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${
+                                    thinkLevel === opt.value
+                                      ? "bg-slate-100 dark:bg-slate-800 text-foreground font-semibold"
+                                      : "text-slate-650 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100"
+                                  }`}
+                                >
+                                  <span>{opt.label}</span>
+                                  <span className="text-[10px] text-slate-400 font-normal">
+                                    {opt.desc}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Premium RAG Search Depth Selector */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setSearchDepthOpen((prev) => !prev)}
+                          className="flex items-center gap-1.5 border border-custom-border bg-white dark:bg-slate-900 rounded-xl px-2.5 py-1 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer select-none"
+                        >
+                          <div
+                            title={`Search Depth: ${searchDepth.toUpperCase()}`}
+                            className={`p-0.5 rounded-lg flex items-center justify-center ${
+                              searchDepth === "deep" ? "text-green-500 animate-pulse" : searchDepth === "fast" ? "text-amber-500" : "text-blue-500"
+                            }`}
+                          >
+                            <Database className="h-4 w-4" />
+                          </div>
+                          <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-350 font-sans flex items-center gap-1">
+                            {searchDepth === "fast" && "⚡ Fast (4)"}
+                            {searchDepth === "balanced" && "🔍 Balanced (8)"}
+                            {searchDepth === "deep" && "🧠 Deep (12)"}
+                            <ChevronDown className={`h-3 w-3 text-slate-400 transition-transform duration-200 ${searchDepthOpen ? "rotate-180" : ""}`} />
+                          </span>
+                        </button>
+
+                        {searchDepthOpen && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-40 cursor-default"
+                              onClick={() => setSearchDepthOpen(false)}
+                            />
+                            <div className="absolute bottom-full mb-2 left-0 z-50 min-w-[220px] overflow-hidden rounded-2xl border border-custom-border bg-white dark:bg-slate-900 p-1.5 shadow-2xl transition-all duration-150 ease-out">
+                              <div className="px-2.5 py-1.5 text-[9px] font-bold tracking-wider text-slate-400 uppercase font-mono border-b border-custom-border mb-1">
+                                RAG Search Context
+                              </div>
+                              {[
+                                { value: "fast", label: "⚡ Fast Context", desc: "Retrieve top 4 chunks (Maximum speed)" },
+                                { value: "balanced", label: "🔍 Balanced Context", desc: "Retrieve top 8 chunks (Ideal precision)" },
+                                { value: "deep", label: "🧠 Deep Research", desc: "Retrieve top 12 chunks (Maximum context depth)" },
+                              ].map((opt) => (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => {
+                                    setSearchDepth(opt.value as any);
+                                    setSearchDepthOpen(false);
+                                  }}
+                                  className={`w-full text-left flex flex-col gap-0.5 rounded-xl px-2.5 py-1.5 text-xs transition-all cursor-pointer ${
+                                    searchDepth === opt.value
+                                      ? "bg-slate-100 dark:bg-slate-800 text-foreground font-semibold"
+                                      : "text-slate-650 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100"
+                                  }`}
+                                >
+                                  <span>{opt.label}</span>
+                                  <span className="text-[10px] text-slate-400 font-normal">
+                                    {opt.desc}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Premium HyDE Toggle Button */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setHydeEnabled((prev) => !prev)}
+                          className={`flex items-center gap-1.5 border rounded-xl px-2.5 py-1 shadow-sm transition-all cursor-pointer select-none ${
+                            hydeEnabled
+                              ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 hover:bg-amber-100/70 dark:hover:bg-amber-900/40"
+                              : "border-custom-border bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
+                          }`}
+                          title="HyDE Expansion: Generates hypothetical document paragraphs to improve search relevancy for short queries"
+                        >
+                          <Brain className={`h-4 w-4 ${hydeEnabled ? "text-amber-500 animate-pulse" : "text-slate-400"}`} />
+                          <span className="text-[11px] font-semibold font-sans">
+                            {hydeEnabled ? "⚡ HyDE ON" : "⚡ HyDE OFF"}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Right Trigger Send Group */}
+                    <div className="flex-shrink-0">
+                      {isAsking ? (
+                        <button
+                          type="button"
+                          onClick={stopGeneration}
+                          className="bg-red-600 hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700 text-white p-2 rounded-xl transition-all shadow-sm cursor-pointer hover:scale-105"
+                          title="Stop generating"
+                        >
+                          <Square className="h-4 w-4 fill-white text-white" />
+                        </button>
+                      ) : (
+                        <button
+                          type="submit"
+                          disabled={!question.trim()}
+                          className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 text-white p-2 rounded-xl transition-all disabled:bg-slate-100 dark:disabled:bg-slate-800 disabled:text-slate-400 disabled:cursor-not-allowed shadow-sm cursor-pointer"
+                        >
+                          <Send className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
+
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -1057,33 +1169,6 @@ export default function ChatPage() {
                     onChange={handleFileUpload}
                     className="hidden"
                   />
-
-                  <input
-                    value={question}
-                    disabled={isAsking}
-                    onChange={(e) => setQuestion(e.target.value)}
-                    placeholder="Ask a question grounded in your session's index..."
-                    className="flex-1 bg-transparent px-3 text-sm text-foreground outline-none placeholder-slate-400 dark:placeholder-slate-500 disabled:opacity-50"
-                  />
-
-                  {isAsking ? (
-                    <button
-                      type="button"
-                      onClick={stopGeneration}
-                      className="bg-red-600 hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-700 text-white p-2 rounded-xl transition-all shadow-sm cursor-pointer hover:scale-105"
-                      title="Stop generating"
-                    >
-                      <Square className="h-4 w-4 fill-white text-white" />
-                    </button>
-                  ) : (
-                    <button
-                      type="submit"
-                      disabled={!question.trim()}
-                      className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 text-white p-2 rounded-xl transition-all disabled:bg-slate-100 dark:disabled:bg-slate-800 disabled:text-slate-400 disabled:cursor-not-allowed shadow-sm cursor-pointer"
-                    >
-                      <Send className="h-4 w-4" />
-                    </button>
-                  )}
                 </div>
               </form>
             </footer>
@@ -1210,6 +1295,17 @@ export default function ChatPage() {
 
             {/* List of matched vector chunks */}
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {activeDrawerSources[0]?.metadata?.hyde_query && (
+                <div className="rounded-xl border border-amber-200/80 dark:border-amber-900/60 bg-amber-500/5 p-4 text-xs transition-all shadow-sm">
+                  <div className="flex items-center gap-2 mb-1.5 text-amber-700 dark:text-amber-400 font-bold uppercase tracking-wider font-mono text-[9px]">
+                    <Brain className="h-4 w-4 text-amber-500 animate-pulse flex-shrink-0" />
+                    HyDE Expanded Concept
+                  </div>
+                  <p className="text-slate-650 dark:text-slate-350 leading-relaxed font-mono italic select-text whitespace-pre-wrap">
+                    {activeDrawerSources[0].metadata.hyde_query}
+                  </p>
+                </div>
+              )}
               {activeDrawerSources.map((source, idx) => (
                 <div
                   key={source.id}

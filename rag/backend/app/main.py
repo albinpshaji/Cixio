@@ -290,7 +290,7 @@ async def chat(
             limit = 12
         else:
             limit = 8
-        sources = retrieve_relevant_chunks(question, sessionId=sessionId, limit=limit, user_id=user_id)
+        sources = retrieve_relevant_chunks(question, sessionId=sessionId, limit=limit, user_id=user_id, hyde=request.hyde)
     except Exception as retrieve_err:
         print(f"[Retrieve Error] Failed: {retrieve_err}")
         sources = []

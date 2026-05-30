@@ -1,18 +1,53 @@
 from typing import Any
+import httpx
 from app.config import settings
 from app.ollama import create_embedding
 from app.schemas import RetrievedChunk
 from app.chroma_db import get_chroma_collection
 
-def retrieve_relevant_chunks(question: str, sessionId: str | None = None, limit: int | None = None, user_id: str | None = None) -> list[RetrievedChunk]:
-    embedding = create_embedding(question)
+def generate_hyde_text(question: str) -> str:
+    """Generate a lightning-fast hypothetical document paragraph with thinking disabled."""
+    prompt = f"Write a single brief phrase describing the following concept:\nConcept: {question}\nDefinition:"
+    
+    try:
+        response = httpx.post(
+            f"{settings.ollama_base_url}/api/generate",
+            json={
+                "model": settings.ollama_chat_model,
+                "prompt": prompt,
+                "stream": False,
+                "think": False,
+                "options": {
+                    "num_predict": settings.hyde_max_tokens,
+                    "temperature": settings.hyde_temperature,
+                    "think": False,
+                    "num_ctx": 512,  # Reduce memory/parsing context window for speed
+                },
+            },
+            timeout=25.0,
+        )
+        response.raise_for_status()
+        answer = response.json().get("response", "").strip()
+        return answer if answer else question
+    except Exception as err:
+        print(f"[HyDE Speed Warning] Failed, falling back to original query: {err}")
+        return question
+
+def retrieve_relevant_chunks(question: str, sessionId: str | None = None, limit: int | None = None, user_id: str | None = None, hyde: bool = False) -> list[RetrievedChunk]:
+    hyde_text = None
+    if hyde:
+        hyde_text = generate_hyde_text(question)
+        search_text = f"Query: {question}\nTarget Context: {hyde_text}"
+    else:
+        search_text = question
+    embedding = create_embedding(search_text)
     query_limit = limit if limit is not None else settings.retrieval_limit
 
     collection = get_chroma_collection()
 
-    where_filter = {}
+    where_filter = None
     if user_id:
-        where_filter["user_id"] = str(user_id)
+        where_filter = {"user_id": str(user_id)}
 
     # Query ChromaDB for top 50 matches for the user
     # We fetch more than the limit so we can apply python-side boosting and sorting
@@ -34,7 +69,9 @@ def retrieve_relevant_chunks(question: str, sessionId: str | None = None, limit:
     for i in range(len(results["ids"][0])):
         chunk_id = results["ids"][0][i]
         content = results["documents"][0][i]
-        metadata = results["metadatas"][0][i]
+        metadata = dict(results["metadatas"][0][i]) if results["metadatas"][0][i] is not None else {}
+        if hyde:
+            metadata["hyde_query"] = search_text
         distance = results["distances"][0][i]
 
         # ChromaDB with cosine space returns distance = 1 - cosine_similarity
