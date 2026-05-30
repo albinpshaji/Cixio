@@ -294,6 +294,12 @@ export default function ChatPage() {
     const lastMessage = messages[messages.length - 1];
     const isUserMsg = lastMessage?.role === "user";
     scrollToBottom(isUserMsg);
+
+    // Auto-scroll the active thinking block as it generates
+    const activeThoughtBox = document.getElementById("active-thought-box");
+    if (activeThoughtBox) {
+      activeThoughtBox.scrollTop = activeThoughtBox.scrollHeight;
+    }
   }, [messages]);
 
   // Initial load: fetch sessions
@@ -347,6 +353,7 @@ export default function ChatPage() {
       if (res.ok) {
         const history = await res.json();
         setMessages(history);
+        setTimeout(() => scrollToBottom(true), 50);
       }
     } catch (err) {
       console.error("Failed to fetch messages for session", err);
@@ -863,7 +870,10 @@ export default function ChatPage() {
                               </div>
                               <ChevronRight className="h-3.5 w-3.5 transform transition-transform group-open:rotate-90 text-slate-400 dark:text-slate-500" />
                             </summary>
-                            <div className="px-3.5 pb-2.5 pt-1.5 border-t border-slate-200 dark:border-slate-800 font-mono text-[11px] leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto text-slate-600 dark:text-slate-350 scrollbar-thin">
+                            <div 
+                              id={index === messages.length - 1 ? "active-thought-box" : undefined}
+                              className="px-3.5 pb-2.5 pt-1.5 border-t border-slate-200 dark:border-slate-800 font-mono text-[11px] leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto text-slate-600 dark:text-slate-350 scrollbar-thin"
+                            >
                               {msg.thoughts}
                             </div>
                           </details>

@@ -43,11 +43,11 @@ def build_rag_prompt(question: str, chunks: list[RetrievedChunk], think_level: s
 
     reasoning_instructions = ""
     if think_level == "low":
-        reasoning_instructions = "Reason about the question in one short sentence, then present a fully detailed, comprehensive answer."
+        reasoning_instructions = "Consider the question briefly before answering. Do not output your thinking process, just give a clear, direct answer."
     elif think_level == "medium":
-        reasoning_instructions = "Provide a concise, structured step-by-step thinking process before answering."
+        reasoning_instructions = "Think efficiently. Focus on the most direct solution without exploring unnecessary edge cases or overthinking. Do not output your thinking process, just give a clear, well-structured answer."
     elif think_level == "max":
-        reasoning_instructions = "Reason deeply and systematically, analyzing the context from multiple perspectives before answering."
+        reasoning_instructions = "Think deeply and consider multiple angles before answering. Do not output your thinking process, just give a thorough, comprehensive answer."
 
     if reasoning_instructions:
         instructions.append(reasoning_instructions)
