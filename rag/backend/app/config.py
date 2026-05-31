@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     generation_max_tokens: int = 4096
     embedding_dimensions: int = 768
     cors_origins: list[str] = ["http://localhost:3000"]
-    jwt_secret_key: str = "smarthub-dev-secret-change-in-production-2026"
+    jwt_secret_key: str  # Required — must be set in .env
     jwt_access_expiry_minutes: int = 30
     jwt_refresh_expiry_days: int = 7
     hyde_max_tokens: int = 35

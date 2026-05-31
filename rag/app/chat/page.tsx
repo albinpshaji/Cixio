@@ -27,10 +27,11 @@ import {
   LogOut,
   Target,
   AlertTriangle,
+  Shuffle,
 } from "lucide-react";
 import { getAccessToken, getCurrentUser, logoutUser, authFetch } from "@/app/lib/auth";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 function parseBold(text: string) {
   const parts = text.split("**");
@@ -131,6 +132,7 @@ export default function ChatPage() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [activeTab, setActiveTab] = useState<"chat" | "documents">("chat");
   const [hydeEnabled, setHydeEnabled] = useState(false);
+  const [hybridEnabled, setHybridEnabled] = useState(true);
   const [priorityDocs, setPriorityDocs] = useState<string[]>([]);
   const [priorityDocsOpen, setPriorityDocsOpen] = useState(false);
   const [toast, setToast] = useState<{ title: string, message: string, type: "error" | "success" | "info" } | null>(null);
@@ -512,6 +514,7 @@ export default function ChatPage() {
           think_level: thinkLevel,
           search_depth: searchDepth,
           hyde: hydeEnabled,
+          hybrid: hybridEnabled,
           priority_docs: priorityDocs.map(id => id.split("::")[0]),
         }),
         signal: controller.signal,
@@ -616,7 +619,7 @@ export default function ChatPage() {
           msg.id === tempId
             ? {
               role: "assistant",
-              content: "Sorry, I encountered a communication error with the local RAG FastAPI engine. Check if port 8001 is open.",
+              content: "Sorry, I encountered a communication error with the local RAG FastAPI engine. Check if port 8000 is open.",
             }
             : msg
         )
@@ -790,7 +793,7 @@ export default function ChatPage() {
           <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
             <span className="hidden md:flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg font-mono">
               <Terminal className="h-3.5 w-3.5 text-blue-500" />
-              FastAPI: port 8001
+              FastAPI: port 8000
             </span>
             <button
               onClick={() => router.push("/dashboard")}
@@ -1282,6 +1285,30 @@ export default function ChatPage() {
                           <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-[200px] whitespace-normal text-center p-2 bg-slate-800 dark:bg-black text-white text-[10px] leading-tight font-medium rounded-lg opacity-0 delay-0 group-hover:opacity-100 group-hover:delay-500 transition-opacity pointer-events-none z-50 shadow-xl">
                             <strong className="block mb-0.5 text-amber-400">HyDE AI Expansion</strong>
                             Generates hypothetical document paragraphs to drastically improve search relevancy for short queries.
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800 dark:border-t-black"></div>
+                          </div>
+                        </button>
+                      </div>
+
+                      {/* Premium Hybrid Search Toggle Button */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setHybridEnabled((prev) => !prev)}
+                          className={`group relative flex items-center gap-1.5 border rounded-xl px-2.5 py-1 shadow-sm transition-all cursor-pointer select-none ${hybridEnabled
+                              ? "border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/40"
+                              : "border-custom-border bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
+                            }`}
+                        >
+                          <Shuffle className={`h-3.5 w-3.5 ${hybridEnabled ? "text-indigo-500" : "text-slate-400"}`} />
+                          <span className="text-[11px] font-semibold font-sans">
+                            {hybridEnabled ? "⚡ Hybrid ON" : "⚡ Hybrid OFF"}
+                          </span>
+
+                          {/* Premium Hover Tooltip */}
+                          <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-[200px] whitespace-normal text-center p-2 bg-slate-800 dark:bg-black text-white text-[10px] leading-tight font-medium rounded-lg opacity-0 delay-0 group-hover:opacity-100 group-hover:delay-500 transition-opacity pointer-events-none z-50 shadow-xl">
+                            <strong className="block mb-0.5 text-indigo-400">Hybrid Search Fusion</strong>
+                            Combines PostgreSQL exact keyword matching with ChromaDB conceptual vectors for 100% search accuracy.
                             <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800 dark:border-t-black"></div>
                           </div>
                         </button>

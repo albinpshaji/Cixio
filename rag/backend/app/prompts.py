@@ -43,7 +43,7 @@ def build_rag_prompt(question: str, chunks: list[RetrievedChunk], think_level: s
 
     reasoning_instructions = ""
     if think_level == "low":
-        reasoning_instructions = "Consider the question briefly before answering. Do not output your thinking process, just give a clear, direct answer."
+        reasoning_instructions = "Consider the question briefly before answering. Do not output your thinking process, just give a clear, detailed answer."
     elif think_level == "medium":
         reasoning_instructions = "Think efficiently. Focus on the most direct solution without exploring unnecessary edge cases or overthinking. Do not output your thinking process, just give a clear, well-structured answer."
     elif think_level == "max":

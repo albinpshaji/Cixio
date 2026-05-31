@@ -1,3 +1,4 @@
+import asyncio
 import json
 import httpx
 from contextlib import asynccontextmanager
@@ -72,6 +73,13 @@ def init_db():
             )
             cursor.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS thoughts TEXT")
             cursor.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS token_usage JSONB")
+            # Create Full-Text Search GIN index on content of documents table
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_documents_content_fts 
+                ON documents USING gin(to_tsvector('english', content));
+                """
+            )
             connection.commit()
 
 
@@ -290,26 +298,27 @@ async def chat(
         raise HTTPException(status_code=400, detail="Question is required.")
 
     # 1. Store user message in history if session is active
+    def _save_user_message():
+        with pool.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT id, user_id FROM chat_sessions WHERE id = %s", (sessionId,))
+                row = cursor.fetchone()
+                if not row:
+                    cursor.execute(
+                        "INSERT INTO chat_sessions (id, title, user_id) VALUES (%s, %s, %s)",
+                        (sessionId, question[:50] or "Chat Session", user_id),
+                    )
+                elif str(row[1]) != user_id:
+                    raise HTTPException(status_code=403, detail="Unauthorized access to chat session.")
+                cursor.execute(
+                    "INSERT INTO chat_messages (session_id, role, content, sources) VALUES (%s, %s, %s, %s)",
+                    (sessionId, "user", question, Jsonb([])),
+                )
+                connection.commit()
+
     if sessionId:
         try:
-            with pool.connection() as connection:
-                with connection.cursor() as cursor:
-                    # Check if session exists, otherwise create it
-                    cursor.execute("SELECT id, user_id FROM chat_sessions WHERE id = %s", (sessionId,))
-                    row = cursor.fetchone()
-                    if not row:
-                        cursor.execute(
-                            "INSERT INTO chat_sessions (id, title, user_id) VALUES (%s, %s, %s)",
-                            (sessionId, question[:50] or "Chat Session", user_id),
-                        )
-                    elif str(row[1]) != user_id:
-                        raise HTTPException(status_code=403, detail="Unauthorized access to chat session.")
-                    # Save user query
-                    cursor.execute(
-                        "INSERT INTO chat_messages (session_id, role, content, sources) VALUES (%s, %s, %s, %s)",
-                        (sessionId, "user", question, Jsonb([])),
-                    )
-                    connection.commit()
+            await asyncio.to_thread(_save_user_message)
         except HTTPException:
             raise
         except Exception as db_err:
@@ -325,7 +334,11 @@ async def chat(
             limit = 24
         else:
             limit = 8
-        sources = retrieve_relevant_chunks(question, sessionId=sessionId, limit=limit, user_id=user_id, hyde=request.hyde, priority_docs=request.priority_docs)
+        sources = await asyncio.to_thread(
+            retrieve_relevant_chunks,
+            question, sessionId=sessionId, limit=limit, user_id=user_id,
+            hyde=request.hyde, hybrid=request.hybrid, priority_docs=request.priority_docs,
+        )
     except Exception as retrieve_err:
         print(f"[Retrieve Error] Failed: {retrieve_err}")
         sources = []
@@ -592,6 +605,21 @@ def list_documents(current_user: dict = Depends(get_current_user)):
 
 @app.delete("/api/v1/documents")
 def delete_document(filename: str, sessionId: str | None = None, current_user: dict = Depends(get_current_user)):
+    # 1. Delete from ChromaDB
+    try:
+        from app.chroma_db import get_chroma_collection
+        collection = get_chroma_collection()
+        chroma_filter: dict = {"$and": [
+            {"source": filename},
+            {"user_id": str(current_user["id"])},
+        ]}
+        if sessionId and sessionId != "null" and sessionId != "undefined":
+            chroma_filter["$and"].append({"sessionId": sessionId})
+        collection.delete(where=chroma_filter)
+    except Exception as chroma_err:
+        print(f"[ChromaDB Delete Warning] {chroma_err}")
+
+    # 2. Delete from PostgreSQL
     with pool.connection() as connection:
         with connection.cursor() as cursor:
             if sessionId and sessionId != "null" and sessionId != "undefined":
